@@ -1,0 +1,6 @@
+/target/
+/.x0-results/
+*.pem
+*.key
+config/local.toml
+secrets/

@@ -1,0 +1,93 @@
+openapi: 3.1.0
+info:
+  title: XanhTab Control API
+  version: 1.0.0
+  description: Zero-account, single-session control API. Mutations require the HttpOnly session cookie, same-origin request, and X-XanhTab-CSRF header.
+servers:
+  - url: https://xanhtab.local:8443
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "204": { description: Service process is accepting requests }
+  /api/v1/status:
+    get:
+      operationId: publicStatus
+      responses:
+        "200": { description: Non-sensitive device and pairing state }
+  /api/v1/pair/exchange:
+    post:
+      operationId: exchangePairingSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret]
+              properties: { secret: { type: string, minLength: 40, maxLength: 128 } }
+      responses:
+        "200": { description: One-time secret exchanged for an HttpOnly cookie and CSRF token }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/session:
+    get:
+      operationId: getSession
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200": { description: Current session and RAM-only history }
+    post:
+      operationId: createSession
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { url: { type: string, format: uri } }
+      responses:
+        "200": { description: Session started }
+  /api/v1/session/{id}:
+    delete:
+      operationId: burnSession
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      responses:
+        "200": { description: Browser tree stopped, egress reset, tmpfs cleared, and auth revoked }
+  /api/v1/session/{id}/navigation:
+    post:
+      operationId: navigate
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      responses: { "200": { description: Navigation accepted } }
+  /api/v1/session/{id}/egress:
+    put:
+      operationId: selectEgress
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      responses: { "200": { description: Session restarted behind selected adapter } }
+  /api/v1/session/{id}/stream-profile:
+    put:
+      operationId: setStreamProfile
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      responses: { "200": { description: Stream profile selected } }
+  /api/v1/metrics:
+    get:
+      operationId: metrics
+      security: [{ sessionCookie: [] }]
+      responses: { "200": { description: Hardware, stream, egress, and blocklist metrics } }
+  /api/v1/webrtc/ticket:
+    post:
+      operationId: issueWebRtcTicket
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses: { "200": { description: Single-use signaling ticket valid for at most five minutes } }
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: xanhtab_session }
+    csrfHeader: { type: apiKey, in: header, name: X-XanhTab-CSRF }
+  parameters:
+    SessionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Error:
+      description: Stable error code and redacted message

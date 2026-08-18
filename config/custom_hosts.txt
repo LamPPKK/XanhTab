@@ -1,0 +1,1 @@
+# One hostname per line. This file is intentionally safe to keep on disk.

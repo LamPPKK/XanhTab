@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#090d0b">
+    <title>XanhTab — Remote isolation system</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Bỏ qua đến trình duyệt</a>
+    <div class="app-shell">
+      <header class="masthead">
+        <div class="brand" aria-label="XanhTab">
+          <span class="brand-mark" aria-hidden="true">XT</span>
+          <div>
+            <strong>XANHTAB</strong>
+            <span>REMOTE ISOLATION SYSTEM / V1</span>
+          </div>
+        </div>
+        <div class="mast-status">
+          <span class="pulse" id="service-pulse" aria-hidden="true"></span>
+          <span id="service-state">ĐANG KIỂM TRA</span>
+          <span class="divider">/</span>
+          <span id="session-phase">IDLE</span>
+        </div>
+      </header>
+
+      <main id="workspace" class="workspace">
+        <section class="browser-module" aria-labelledby="browser-title">
+          <h1 id="browser-title" class="visually-hidden">Phiên duyệt web cô lập</h1>
+          <div class="browser-toolbar">
+            <div class="nav-cluster" aria-label="Điều hướng">
+              <button type="button" data-nav="back" title="Quay lại">BACK</button>
+              <button type="button" data-nav="forward" title="Tiến tới">NEXT</button>
+              <button type="button" data-nav="reload" title="Tải lại">RELOAD</button>
+            </div>
+            <form id="omnibox-form" class="omnibox-form">
+              <label class="visually-hidden" for="omnibox">Địa chỉ hoặc từ khóa</label>
+              <span class="protocol-lock" aria-hidden="true">//</span>
+              <input id="omnibox" name="url" autocomplete="off" spellcheck="false" placeholder="Nhập địa chỉ hoặc từ khóa">
+              <button type="submit">GO</button>
+            </form>
+            <button type="button" id="burn-button" class="burn-button">BURN SESSION</button>
+          </div>
+
+          <div class="viewport-frame">
+            <video id="remote-video" autoplay playsinline aria-label="Luồng hình ảnh từ browser cô lập"></video>
+            <div id="viewport-empty" class="viewport-empty">
+              <div class="reticle" aria-hidden="true"><span></span></div>
+              <p class="eyebrow">ISOLATED VIEWPORT</p>
+              <h2 id="viewport-title">Chưa có phiên hoạt động</h2>
+              <p id="viewport-copy">Khởi tạo một WebView duy nhất. Cookie, cache, history và token sẽ nằm trong tmpfs.</p>
+              <button type="button" id="start-button" class="primary-action">START PRIVATE SESSION</button>
+            </div>
+            <div class="viewport-readout" aria-hidden="true">
+              <span id="profile-readout">1080P / 30</span>
+              <span id="stream-readout">NO SIGNAL</span>
+            </div>
+          </div>
+
+          <div class="session-strip">
+            <div><span>SESSION</span><strong id="session-id">—</strong></div>
+            <div><span>EGRESS</span><strong id="egress-readout">DIRECT</strong></div>
+            <div><span>AUTO-BURN</span><strong id="autoburn-readout">30:00</strong></div>
+            <div><span>CONTROL</span><strong id="control-readout">DETACHED</strong></div>
+          </div>
+        </section>
+
+        <aside class="instrument-panel" aria-label="Bảng điều khiển phần cứng và mạng">
+          <section class="panel-block">
+            <div class="panel-heading"><h2>HARDWARE</h2><span>LIVE</span></div>
+            <div class="metric-grid">
+              <div class="metric"><span>MEM AVAILABLE</span><strong id="metric-memory">—</strong><small>MiB</small></div>
+              <div class="metric"><span>THERMAL</span><strong id="metric-temp">—</strong><small>°C</small></div>
+              <div class="metric"><span>BITRATE</span><strong id="metric-bitrate">—</strong><small>kbps</small></div>
+              <div class="metric"><span>PACKET LOSS</span><strong id="metric-loss">—</strong><small>%</small></div>
+            </div>
+          </section>
+
+          <section class="panel-block">
+            <div class="panel-heading"><h2>STREAM PROFILE</h2><span>FIXED LADDER</span></div>
+            <div class="segmented" id="profile-controls">
+              <button type="button" data-profile="1080p30">1080P30 <small>PRIMARY</small></button>
+              <button type="button" data-profile="720p15">720P15 <small>RELEASE FLOOR</small></button>
+              <button type="button" data-profile="480p10">480P10 <small>EMERGENCY</small></button>
+            </div>
+          </section>
+
+          <section class="panel-block">
+            <div class="panel-heading"><h2>EGRESS ADAPTER</h2><span id="egress-state">READY</span></div>
+            <div class="egress-grid" id="egress-controls">
+              <button type="button" data-egress="direct">DIRECT</button>
+              <button type="button" data-egress="tor">TOR</button>
+              <button type="button" data-egress="warp">WARP</button>
+              <button type="button" data-egress="wireguard">WIREGUARD</button>
+              <button type="button" data-egress="proxy">PROXY</button>
+            </div>
+            <p class="panel-note">Đổi adapter sẽ dừng browser, reset policy, xóa runtime và mở lại phiên.</p>
+          </section>
+
+          <section class="panel-block history-block">
+            <div class="panel-heading"><h2>RAM HISTORY</h2><span id="blocked-count">0 BLOCKED</span></div>
+            <ol id="history-list" class="history-list"><li>Không có lịch sử phiên</li></ol>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="system-footer">
+        <span>ONE VIEW / ONE CONTROLLER / ZERO ACCOUNT</span>
+        <span id="toast" role="status" aria-live="polite">SYSTEM READY</span>
+      </footer>
+    </div>
+
+    <dialog id="pairing-dialog" class="pairing-dialog">
+      <form id="pairing-form" method="dialog">
+        <p class="eyebrow">ZERO-ACCOUNT PAIRING</p>
+        <h2>Kết nối thiết bị điều khiển</h2>
+        <p>Quét QR do thiết bị in sau health check, hoặc nhập manual code 256-bit.</p>
+        <label for="pairing-secret">PAIRING SECRET / MANUAL CODE</label>
+        <input id="pairing-secret" name="secret" required minlength="40" maxlength="128" autocomplete="one-time-code">
+        <p id="pairing-error" class="form-error" role="alert"></p>
+        <button type="submit" class="primary-action">PAIR THIS DEVICE</button>
+      </form>
+    </dialog>
+  </body>
+</html>

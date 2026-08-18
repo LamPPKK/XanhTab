@@ -1,0 +1,4 @@
+g xanhtab -
+u xanhtab - "XanhTab control plane" /var/lib/xanhtab /usr/sbin/nologin
+u xanhtab-browser 988 "XanhTab browser" /nonexistent /usr/sbin/nologin
+m xanhtab-browser xanhtab

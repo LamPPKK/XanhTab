@@ -1,0 +1,21 @@
+# X0 corpus v1: one absolute URL per line. Keep exactly 20 representative sites.
+https://example.com/
+https://www.wikipedia.org/
+https://news.ycombinator.com/
+https://github.com/
+https://mail.proton.me/
+https://app.element.io/
+https://www.openstreetmap.org/
+https://maps.google.com/
+https://www.reddit.com/
+https://developer.mozilla.org/
+https://web.dev/
+https://www.bbc.com/
+https://www.nytimes.com/
+https://www.youtube.com/html5
+https://vimeo.com/
+https://soundcloud.com/
+https://threejs.org/examples/
+https://react.dev/
+https://docs.google.com/
+https://duckduckgo.com/?q=xanhtab+scroll+test

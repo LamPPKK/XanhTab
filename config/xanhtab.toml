@@ -1,0 +1,38 @@
+# Local development configuration. Production must use TLS and the real backends.
+[server]
+listen = "127.0.0.1:8088"
+public_base_url = "http://127.0.0.1:8088"
+static_dir = "web"
+secure_cookies = false
+allow_insecure_http = true
+allowed_origins = ["http://127.0.0.1:8088"]
+
+[session]
+runtime_dir = "/tmp/xanhtab-session"
+pairing_file = "/tmp/xanhtab-pairing.txt"
+auth_ttl_seconds = 28800
+ticket_ttl_seconds = 60
+auto_burn_seconds = 1800
+initial_url = "xanhtab://home"
+initial_profile = "1080p30"
+
+[browser]
+enabled = false
+command = "target/debug/xanhtab-browser"
+socket = "/tmp/xanhtab-browser.sock"
+stop_timeout_seconds = 5
+
+[network]
+enabled = false
+initial_mode = "direct"
+netd_socket = "/tmp/xanhtab-netd.sock"
+browser_uid = 988
+tor_proxy = "socks5h://127.0.0.1:9050"
+warp_proxy = "socks5://127.0.0.1:40000"
+wireguard_config = "/etc/xanhtab/secrets/wg0.conf"
+proxy_url_file = "/etc/xanhtab/secrets/proxy-url"
+proxy_endpoint = "127.0.0.1:1080"
+
+[blocklist]
+fst_path = "/tmp/xanhtab-blocklist.fst"
+custom_hosts_path = "config/custom_hosts.txt"

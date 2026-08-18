@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireball.example/schemas/xanhtab-config-v1.json",
+  "title": "XanhTab configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["server", "session", "browser", "network", "blocklist"],
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["listen", "public_base_url", "static_dir", "secure_cookies", "allow_insecure_http", "allowed_origins"],
+      "properties": {
+        "listen": { "type": "string", "pattern": "^.+:[0-9]+$" },
+        "public_base_url": { "type": "string", "format": "uri" },
+        "static_dir": { "type": "string", "minLength": 1 },
+        "tls_cert": { "type": ["string", "null"] },
+        "tls_key": { "type": ["string", "null"] },
+        "secure_cookies": { "type": "boolean" },
+        "allow_insecure_http": { "type": "boolean" },
+        "allowed_origins": { "type": "array", "items": { "type": "string", "format": "uri" }, "minItems": 1 }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_dir", "pairing_file", "auth_ttl_seconds", "ticket_ttl_seconds", "auto_burn_seconds", "initial_url", "initial_profile"],
+      "properties": {
+        "runtime_dir": { "type": "string", "pattern": "^/run/" },
+        "pairing_file": { "type": "string", "pattern": "^/run/" },
+        "auth_ttl_seconds": { "type": "integer", "minimum": 300 },
+        "ticket_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "auto_burn_seconds": { "type": "integer", "minimum": 0 },
+        "initial_url": { "type": "string", "format": "uri" },
+        "initial_profile": { "enum": ["1080p30", "720p15", "480p10"] }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "command", "socket", "stop_timeout_seconds"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "command": { "type": "string", "minLength": 1 },
+        "socket": { "type": "string", "minLength": 1 },
+        "stop_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "initial_mode", "netd_socket", "browser_uid", "tor_proxy", "warp_proxy", "wireguard_config", "proxy_url_file", "proxy_endpoint"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "initial_mode": { "enum": ["direct", "tor", "warp", "wireguard", "proxy"] },
+        "netd_socket": { "type": "string", "pattern": "^/run/" },
+        "browser_uid": { "type": "integer", "minimum": 1 },
+        "tor_proxy": { "type": "string" },
+        "warp_proxy": { "type": "string" },
+        "wireguard_config": { "type": "string" },
+        "proxy_url_file": { "type": "string" },
+        "proxy_endpoint": { "type": "string", "pattern": "^[^:]+:[0-9]+$" }
+      }
+    },
+    "blocklist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fst_path", "custom_hosts_path"],
+      "properties": {
+        "fst_path": { "type": "string" },
+        "custom_hosts_path": { "type": "string" }
+      }
+    }
+  }
+}

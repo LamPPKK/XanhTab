@@ -1,0 +1,39 @@
+[server]
+listen = "0.0.0.0:8443"
+public_base_url = "https://xanhtab.local:8443"
+static_dir = "/usr/share/xanhtab/web"
+tls_cert = "/etc/xanhtab/tls/server.crt"
+tls_key = "/etc/xanhtab/tls/server.key"
+secure_cookies = true
+allow_insecure_http = false
+allowed_origins = ["https://xanhtab.local:8443"]
+
+[session]
+runtime_dir = "/run/xanhtab-session"
+pairing_file = "/run/xanhtab/pairing.txt"
+auth_ttl_seconds = 28800
+ticket_ttl_seconds = 60
+auto_burn_seconds = 1800
+initial_url = "xanhtab://home"
+initial_profile = "1080p30"
+
+[browser]
+enabled = true
+command = "/usr/local/libexec/xanhtab-browser"
+socket = "/run/xanhtab/browser.sock"
+stop_timeout_seconds = 5
+
+[network]
+enabled = true
+initial_mode = "direct"
+netd_socket = "/run/xanhtab/netd.sock"
+browser_uid = 988
+tor_proxy = "socks5h://127.0.0.1:9050"
+warp_proxy = "socks5://127.0.0.1:40000"
+wireguard_config = "/etc/xanhtab/secrets/wg0.conf"
+proxy_url_file = "/etc/xanhtab/secrets/proxy-url"
+proxy_endpoint = "127.0.0.1:1080"
+
+[blocklist]
+fst_path = "/var/lib/xanhtab/blocklist.fst"
+custom_hosts_path = "/etc/xanhtab/custom_hosts.txt"

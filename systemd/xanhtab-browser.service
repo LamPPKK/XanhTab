@@ -1,0 +1,46 @@
+[Unit]
+Description=XanhTab isolated WPE and GStreamer browser tree
+Documentation=https://github.com/LamPPKK/XanhTab
+After=network-online.target xanhtab-netd.service
+Wants=network-online.target xanhtab-netd.service
+
+[Service]
+Type=simple
+User=xanhtab-browser
+Group=xanhtab
+SupplementaryGroups=video render
+Environment=XDG_RUNTIME_DIR=/run/xanhtab-session
+Environment=WEBKIT_FORCE_SANDBOX=1
+Environment=XANHTAB_PROXY_URL_FILE=/etc/xanhtab/secrets/proxy-url
+ExecStart=/usr/local/libexec/xanhtab-browser --socket /run/xanhtab/browser.sock --internal-home-file /usr/share/xanhtab/web/internal-home.html
+ExecStopPost=/usr/bin/find /run/xanhtab-session -mindepth 1 -delete
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=5s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/xanhtab /run/xanhtab-session
+ReadOnlyPaths=/etc/xanhtab /var/lib/xanhtab
+ReadOnlyPaths=/usr/share/xanhtab
+DevicePolicy=closed
+DeviceAllow=/dev/dri/renderD128 rw
+DeviceAllow=/dev/dri/card0 rw
+DeviceAllow=/dev/video11 rw
+MemoryHigh=380M
+MemoryMax=400M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target
