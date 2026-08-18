@@ -15,7 +15,7 @@ At boot and after every burn, the daemon creates 256 bits with the OS CSPRNG. Th
 
 `POST /api/v1/pair/exchange` consumes either representation exactly once. It returns a CSRF token in the response body and sets `xanhtab_session` as `HttpOnly`, `SameSite=Strict`, and `Secure` in production. Mutations require both the cookie and `X-XanhTab-CSRF`. Five failed pairing attempts cause a global 30-second delay.
 
-WebSocket and future WebRTC signaling connections use a one-time, short-lived ticket from `POST /api/v1/webrtc/ticket`. Burn increments the auth generation and invalidates every cookie and outstanding ticket.
+Event and WebRTC signaling connections use purpose-bound, one-time, short-lived tickets from `POST /api/v1/webrtc/ticket`. Tickets never appear in the WebSocket URL: the client must send `{"type":"authenticate","ticket":"…"}` as its first text frame within five seconds. A ticket issued for `events` cannot open `signaling`, and either use consumes it. Burn increments the auth generation and invalidates every cookie and outstanding ticket.
 
 ## Session state
 
@@ -32,12 +32,14 @@ If any cleanup step fails, all remaining cleanup steps are still attempted and t
 
 ## Public HTTP surface
 
-The machine-readable definition is [`schemas/openapi-v1.yaml`](../schemas/openapi-v1.yaml). It includes pairing exchange, create/status/burn, navigation, egress selection, stream profile, metrics, ticket issuance, and the event WebSocket. Navigation accepts only `http`, `https`, and the internal `xanhtab` scheme. Popup policy remains one-view-only.
+The machine-readable definition is [`schemas/openapi-v1.yaml`](../schemas/openapi-v1.yaml). It includes pairing exchange, create/status/burn, navigation, egress selection, stream profile, per-session blocklist and auto-burn settings, versioned metrics, purpose-bound ticket issuance, the event WebSocket, and the authenticated signaling WebSocket. Navigation accepts only `http`, `https`, and the internal `xanhtab` scheme. Popup policy remains one-view-only.
+
+`/ws/v1/session/{id}/signal` validates same-origin metadata, upgrades without URL credentials, consumes a `signaling` ticket from the time-limited first frame, checks the active controller lease, and only then connects to the configured loopback rswebrtc server. The embedded rswebrtc web server is disabled. Its signaling listener binds `127.0.0.1:8444`, and the public STUN default is explicitly blank unless an operator opts in through a future reviewed configuration path.
 
 ## Private service protocols
 
-Both Unix protocols are newline-delimited JSON with a required protocol enum. Browser commands are `start`, `navigate`, and `stop`. Net commands are `apply`, `reset`, and `status`. The privileged helper validates configuration into fixed argv vectors and never accepts an executable name, raw nftables statement, route statement, or shell fragment from the daemon.
+Both Unix protocols are newline-delimited JSON with a required protocol enum. Browser commands are `start`, `navigate`, and `stop`. Net commands are `apply`, `reset`, and `status`. The privileged helper derives one complete nftables transaction from validated local configuration; it never accepts an executable name, raw nftables statement, route statement, or shell fragment from the daemon.
 
 ## Compatibility
 
-Breaking field or semantic changes require v2. `fireball-docker` must consume released schemas and web-client artifacts instead of copying unversioned source. WebRTC media signaling remains gated by X0 hardware results; the event ticket endpoint must not be mistaken for completed media negotiation.
+Breaking field or semantic changes require v2. `fireball-docker` must consume released schemas and web-client artifacts instead of copying unversioned source. The signaling relay contract is implemented, but end-to-end rswebrtc consumer negotiation and media/input evidence remain gated by X0 hardware results.

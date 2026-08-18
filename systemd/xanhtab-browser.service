@@ -12,7 +12,8 @@ SupplementaryGroups=video render
 Environment=XDG_RUNTIME_DIR=/run/xanhtab-session
 Environment=WEBKIT_FORCE_SANDBOX=1
 Environment=XANHTAB_PROXY_URL_FILE=/etc/xanhtab/secrets/proxy-url
-ExecStart=/usr/local/libexec/xanhtab-browser --socket /run/xanhtab/browser.sock --internal-home-file /usr/share/xanhtab/web/internal-home.html
+Environment=GST_PLUGIN_PATH_1_0=/usr/lib/xanhtab/gstreamer-1.0
+ExecStart=/usr/local/libexec/xanhtab-browser --socket /run/xanhtab/browser.sock --internal-home-file /usr/share/xanhtab/web/internal-home.html --signaling-host 127.0.0.1 --signaling-port 8444
 ExecStopPost=/usr/bin/find /run/xanhtab-session -mindepth 1 -delete
 Restart=on-failure
 RestartSec=2s
@@ -34,6 +35,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/run/xanhtab /run/xanhtab-session
 ReadOnlyPaths=/etc/xanhtab /var/lib/xanhtab
 ReadOnlyPaths=/usr/share/xanhtab
+ReadOnlyPaths=/usr/lib/xanhtab/gstreamer-1.0
 DevicePolicy=closed
 DeviceAllow=/dev/dri/renderD128 rw
 DeviceAllow=/dev/dri/card0 rw

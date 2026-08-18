@@ -23,13 +23,20 @@ command = "/usr/local/libexec/xanhtab-browser"
 socket = "/run/xanhtab/browser.sock"
 stop_timeout_seconds = 5
 
+[signaling]
+enabled = true
+upstream_uri = "ws://127.0.0.1:8444"
+plugin_directory = "/usr/lib/xanhtab/gstreamer-1.0"
+# stun_config_file = "/etc/xanhtab/secrets/stun.json"
+# turn_config_file = "/etc/xanhtab/secrets/turn.json"
+
 [network]
 enabled = true
 initial_mode = "direct"
 netd_socket = "/run/xanhtab/netd.sock"
 browser_uid = 988
 tor_proxy = "socks5h://127.0.0.1:9050"
-warp_proxy = "socks5://127.0.0.1:40000"
+warp_proxy = "socks5h://127.0.0.1:40000"
 wireguard_config = "/etc/xanhtab/secrets/wg0.conf"
 proxy_url_file = "/etc/xanhtab/secrets/proxy-url"
 proxy_endpoint = "127.0.0.1:1080"

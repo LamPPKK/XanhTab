@@ -4,7 +4,7 @@
   "title": "XanhTab configuration v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["server", "session", "browser", "network", "blocklist"],
+  "required": ["server", "session", "browser", "signaling", "network", "blocklist"],
   "properties": {
     "server": {
       "type": "object",
@@ -44,6 +44,18 @@
         "command": { "type": "string", "minLength": 1 },
         "socket": { "type": "string", "minLength": 1 },
         "stop_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
+      }
+    },
+    "signaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "upstream_uri", "plugin_directory"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "upstream_uri": { "type": "string", "pattern": "^wss?://(127\\.0\\.0\\.1|\\[?::1\\]?|localhost)(:[0-9]+)?(/.*)?$" },
+        "plugin_directory": { "type": "string", "pattern": "^/" },
+        "stun_config_file": { "type": ["string", "null"], "pattern": "^/" },
+        "turn_config_file": { "type": ["string", "null"], "pattern": "^/" }
       }
     },
     "network": {

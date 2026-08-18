@@ -27,6 +27,13 @@ struct Args {
     socket: PathBuf,
     #[arg(long, default_value = "/usr/share/xanhtab/web/internal-home.html")]
     internal_home_file: PathBuf,
+    #[arg(long, default_value = "127.0.0.1")]
+    signaling_host: String,
+    #[arg(long, default_value_t = 8444)]
+    signaling_port: u16,
+    /// Explicitly allow webrtcsink's public STUN default. Disabled in production.
+    #[arg(long)]
+    public_stun: bool,
     /// Use newline-delimited JSON over stdin for the hardware gate harness.
     #[arg(long)]
     stdio: bool,
@@ -108,7 +115,14 @@ impl Pipeline {
 
     async fn spawn(&mut self, url: Url, args: &Args) -> Result<()> {
         let location = resolve_location(&url, &args.internal_home_file)?;
-        let gst_args = pipeline_args(&location, self.profile, self.egress)?;
+        let gst_args = pipeline_args(
+            &location,
+            self.profile,
+            self.egress,
+            &args.signaling_host,
+            args.signaling_port,
+            args.public_stun,
+        )?;
         if args.dry_run {
             println!("{} {}", args.gst_launch.display(), gst_args.join(" "));
             return Ok(());
@@ -142,9 +156,23 @@ impl Pipeline {
     }
 }
 
-fn pipeline_args(url: &Url, profile: StreamProfile, _egress: EgressMode) -> Result<Vec<String>> {
+fn pipeline_args(
+    url: &Url,
+    profile: StreamProfile,
+    _egress: EgressMode,
+    signaling_host: &str,
+    signaling_port: u16,
+    public_stun: bool,
+) -> Result<Vec<String>> {
     if !matches!(url.scheme(), "http" | "https" | "file") {
         bail!("unsupported browser URL scheme")
+    }
+    let signaling_is_loopback = signaling_host == "localhost"
+        || signaling_host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if !signaling_is_loopback || signaling_port == 0 {
+        bail!("embedded signaling server must bind a loopback host and non-zero port")
     }
     let (width, height, fps) = profile.dimensions();
     let bitrate = match profile {
@@ -152,7 +180,7 @@ fn pipeline_args(url: &Url, profile: StreamProfile, _egress: EgressMode) -> Resu
         StreamProfile::Hd15 => 3_000_000,
         StreamProfile::Sd10 => 1_200_000,
     };
-    Ok(vec![
+    let mut arguments = vec![
         "-e".into(),
         "wpesrc".into(),
         "name=web".into(),
@@ -181,8 +209,9 @@ fn pipeline_args(url: &Url, profile: StreamProfile, _egress: EgressMode) -> Resu
         "name=rtc".into(),
         "enable-control-data-channel=true".into(),
         "run-signalling-server=true".into(),
-        "run-web-server=true".into(),
-        "web-server-host-addr=http://127.0.0.1:9090/".into(),
+        format!("signalling-server-host={signaling_host}"),
+        format!("signalling-server-port={signaling_port}"),
+        "run-web-server=false".into(),
         "meta=meta,name=xanhtab".into(),
         "web.audio_0".into(),
         "!".into(),
@@ -196,7 +225,11 @@ fn pipeline_args(url: &Url, profile: StreamProfile, _egress: EgressMode) -> Resu
         "bitrate=64000".into(),
         "!".into(),
         "rtc.".into(),
-    ])
+    ];
+    if !public_stun {
+        arguments.push("stun-server=".into());
+    }
+    Ok(arguments)
 }
 
 fn resolve_location(url: &Url, internal_home_file: &std::path::Path) -> Result<Url> {
@@ -212,8 +245,8 @@ fn resolve_location(url: &Url, internal_home_file: &std::path::Path) -> Result<U
 
 fn proxy_for(mode: EgressMode) -> Result<Option<String>> {
     match mode {
-        EgressMode::Tor => Ok(Some("socks5://127.0.0.1:9050".into())),
-        EgressMode::Warp => Ok(Some("socks5://127.0.0.1:40000".into())),
+        EgressMode::Tor => Ok(Some("socks5h://127.0.0.1:9050".into())),
+        EgressMode::Warp => Ok(Some("socks5h://127.0.0.1:40000".into())),
         EgressMode::Proxy => {
             let path = std::env::var_os("XANHTAB_PROXY_URL_FILE")
                 .map(PathBuf::from)
@@ -221,7 +254,7 @@ fn proxy_for(mode: EgressMode) -> Result<Option<String>> {
             let value = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let parsed = Url::parse(value.trim()).context("invalid proxy URL")?;
-            if !matches!(parsed.scheme(), "http" | "https" | "socks5") {
+            if !matches!(parsed.scheme(), "http" | "https" | "socks5" | "socks5h") {
                 bail!("unsupported proxy scheme")
             }
             Ok(Some(parsed.to_string()))
@@ -313,6 +346,9 @@ mod tests {
             &Url::parse("https://example.com").unwrap(),
             StreamProfile::Hd15,
             EgressMode::Direct,
+            "127.0.0.1",
+            8444,
+            false,
         )
         .unwrap();
         assert!(args.contains(&"v4l2h264enc".to_string()));
@@ -322,6 +358,10 @@ mod tests {
             )
         );
         assert!(args.contains(&"enable-control-data-channel=true".to_string()));
+        assert!(args.contains(&"signalling-server-host=127.0.0.1".to_string()));
+        assert!(args.contains(&"signalling-server-port=8444".to_string()));
+        assert!(args.contains(&"run-web-server=false".to_string()));
+        assert!(args.contains(&"stun-server=".to_string()));
     }
 
     #[test]

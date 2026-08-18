@@ -28,7 +28,7 @@
     document.querySelector(".app-shell").setAttribute("aria-busy", String(busy));
     const active = state.session?.phase === "active" && Boolean(state.csrf);
     document.querySelectorAll("button").forEach((button) => {
-      const needsSession = button.matches("[data-nav], [data-profile], [data-egress], #burn-button, #omnibox-form button");
+      const needsSession = button.matches("[data-nav], [data-profile], [data-egress], [data-autoburn], #blocklist-toggle, #burn-button, #omnibox-form button");
       button.disabled = busy || (needsSession && !active);
     });
     if (busy) toast("APPLYING TRANSACTION");
@@ -47,9 +47,14 @@
     ui["viewport-copy"].textContent = snapshot?.failure || "Khởi tạo một WebView duy nhất. Cookie, cache, history và token sẽ nằm trong tmpfs.";
     ui["start-button"].hidden = snapshot?.phase === "burning" || active;
     ui["profile-readout"].textContent = (snapshot?.stream_profile || "1080p30").replace("p", "P / ");
+    const autoBurn = snapshot?.auto_burn_seconds ?? 1800;
+    ui["autoburn-readout"].textContent = autoBurn === 0 ? "OFF" : `${Math.floor(autoBurn / 60)}:${String(autoBurn % 60).padStart(2, "0")}`;
+    ui["blocklist-toggle"].innerHTML = `${snapshot?.blocklist_enabled === false ? "BLOCKLIST OFF" : "BLOCKLIST ON"} <small>SESSION POLICY</small>`;
+    ui["blocklist-toggle"].classList.toggle("active", snapshot?.blocklist_enabled !== false);
     document.querySelectorAll("[data-profile]").forEach((button) => button.classList.toggle("active", button.dataset.profile === snapshot?.stream_profile));
     document.querySelectorAll("[data-egress]").forEach((button) => button.classList.toggle("active", button.dataset.egress === snapshot?.egress));
-    document.querySelectorAll("[data-nav], [data-profile], [data-egress], #burn-button, #omnibox-form button").forEach((button) => { button.disabled = !active; });
+    document.querySelectorAll("[data-autoburn]").forEach((button) => button.classList.toggle("active", Number(button.dataset.autoburn) === autoBurn));
+    document.querySelectorAll("[data-nav], [data-profile], [data-egress], [data-autoburn], #blocklist-toggle, #burn-button, #omnibox-form button").forEach((button) => { button.disabled = !active; });
     renderHistory(history);
     if (active) connectEvents().catch((error) => toast(error.message, true));
   }
@@ -87,13 +92,21 @@
 
   async function connectEvents() {
     if (!state.session?.id || state.socket?.readyState === WebSocket.OPEN || !state.csrf) return;
-    const { ticket } = await request("/api/v1/webrtc/ticket", mutation("POST", {}));
+    const { ticket } = await request("/api/v1/webrtc/ticket", mutation("POST", { purpose: "events" }));
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${scheme}//${location.host}/ws/v1/session/${state.session.id}/events?ticket=${encodeURIComponent(ticket)}`);
+    const socket = new WebSocket(`${scheme}//${location.host}/ws/v1/session/${state.session.id}/events`);
     state.socket = socket;
-    socket.addEventListener("open", () => toast("EVENT CHANNEL SECURE"));
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "authenticate", ticket })));
     socket.addEventListener("message", (event) => {
       const payload = JSON.parse(event.data);
+      if (payload.type === "authenticated") {
+        toast("EVENT CHANNEL SECURE");
+        return;
+      }
+      if (payload.error) {
+        toast(payload.error.code || "EVENT CHANNEL REJECTED", true);
+        return;
+      }
       if (payload.session) renderSession(payload.session);
     });
     socket.addEventListener("close", () => { if (state.socket === socket) state.socket = null; });
@@ -162,6 +175,21 @@
     toast(`${profile} SELECTED`);
   }
 
+  async function setAutoBurn(seconds) {
+    if (!state.session?.id) return;
+    const snapshot = await request(`/api/v1/session/${state.session.id}/auto-burn`, mutation("PUT", { seconds }));
+    renderSession(snapshot);
+    toast(seconds === 0 ? "AUTO-BURN DISABLED FOR SESSION" : `AUTO-BURN ${seconds / 60}M`);
+  }
+
+  async function toggleBlocklist() {
+    if (!state.session?.id) return;
+    const enabled = state.session?.blocklist_enabled === false;
+    const snapshot = await request(`/api/v1/session/${state.session.id}/blocklist`, mutation("PUT", { enabled }));
+    renderSession(snapshot);
+    toast(`BLOCKLIST ${enabled ? "ENABLED" : "DISABLED"}`);
+  }
+
   async function refreshMetrics() {
     if (!state.csrf) return;
     try {
@@ -172,6 +200,7 @@
       ui["metric-loss"].textContent = data.stream.packet_loss_percent?.toFixed(2) || "—";
       ui["blocked-count"].textContent = `${data.blocked_requests} BLOCKED`;
       ui["stream-readout"].textContent = data.stream.connected ? `${data.stream.fps.toFixed(1)} FPS` : "NO SIGNAL";
+      ui["service-state"].title = `WPE ${data.versions.webkit_engine} / GST ${data.versions.gstreamer} / RSWEBRTC ${data.versions.rswebrtc}`;
     } catch (error) {
       if (/unauthorized/i.test(error.message)) state.csrf = null;
     }
@@ -200,6 +229,8 @@
     document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.nav).catch((error) => toast(error.message, true))));
     document.querySelectorAll("[data-egress]").forEach((button) => button.addEventListener("click", () => setEgress(button.dataset.egress).catch((error) => toast(error.message, true))));
     document.querySelectorAll("[data-profile]").forEach((button) => button.addEventListener("click", () => setProfile(button.dataset.profile).catch((error) => toast(error.message, true))));
+    document.querySelectorAll("[data-autoburn]").forEach((button) => button.addEventListener("click", () => setAutoBurn(Number(button.dataset.autoburn)).catch((error) => toast(error.message, true))));
+    ui["blocklist-toggle"].addEventListener("click", () => toggleBlocklist().catch((error) => toast(error.message, true)));
   }
 
   async function boot() {

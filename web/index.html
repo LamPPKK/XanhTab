@@ -101,6 +101,17 @@
             <p class="panel-note">Đổi adapter sẽ dừng browser, reset policy, xóa runtime và mở lại phiên.</p>
           </section>
 
+          <section class="panel-block">
+            <div class="panel-heading"><h2>SESSION POLICY</h2><span>RAM ONLY</span></div>
+            <div class="segmented" id="autoburn-controls">
+              <button type="button" data-autoburn="300">AUTO-BURN 5M <small>STRICT</small></button>
+              <button type="button" data-autoburn="1800">AUTO-BURN 30M <small>DEFAULT</small></button>
+              <button type="button" data-autoburn="0">AUTO-BURN OFF <small>THIS SESSION</small></button>
+              <button type="button" id="blocklist-toggle">BLOCKLIST ON <small>SESSION POLICY</small></button>
+            </div>
+            <p class="panel-note">Tắt blocklist hoặc auto-burn chỉ thay đổi phiên hiện tại; burn sẽ khôi phục mặc định.</p>
+          </section>
+
           <section class="panel-block history-block">
             <div class="panel-heading"><h2>RAM HISTORY</h2><span id="blocked-count">0 BLOCKED</span></div>
             <ol id="history-list" class="history-list"><li>Không có lịch sử phiên</li></ol>

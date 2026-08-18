@@ -42,6 +42,7 @@ pub struct SessionManager {
     runtime_dir: Arc<std::path::PathBuf>,
     initial_egress: EgressMode,
     initial_profile: StreamProfile,
+    initial_auto_burn_seconds: u64,
 }
 
 impl SessionManager {
@@ -52,10 +53,12 @@ impl SessionManager {
         runtime_dir: std::path::PathBuf,
         initial_egress: EgressMode,
         initial_profile: StreamProfile,
+        initial_auto_burn_seconds: u64,
     ) -> Self {
         let snapshot = SessionSnapshot {
             egress: initial_egress,
             stream_profile: initial_profile,
+            auto_burn_seconds: initial_auto_burn_seconds,
             ..SessionSnapshot::default()
         };
         Self {
@@ -71,6 +74,7 @@ impl SessionManager {
             runtime_dir: Arc::new(runtime_dir),
             initial_egress,
             initial_profile,
+            initial_auto_burn_seconds,
         }
     }
 
@@ -160,6 +164,7 @@ impl SessionManager {
         data.snapshot = SessionSnapshot {
             egress: self.initial_egress,
             stream_profile: self.initial_profile,
+            auto_burn_seconds: self.initial_auto_burn_seconds,
             ..SessionSnapshot::default()
         };
         data.controller = None;
@@ -215,6 +220,46 @@ impl SessionManager {
         drop(data);
         self.events.publish("stream.profile", snapshot.clone());
         Ok(snapshot)
+    }
+
+    pub async fn set_blocklist_enabled(
+        &self,
+        client_id: Uuid,
+        enabled: bool,
+    ) -> Result<SessionSnapshot, AppError> {
+        let mut data = self.inner.write().await;
+        ensure_active_lease(&data, client_id)?;
+        data.snapshot.blocklist_enabled = enabled;
+        data.last_activity = Instant::now();
+        let snapshot = data.snapshot.clone();
+        drop(data);
+        self.events.publish("blocklist.setting", snapshot.clone());
+        Ok(snapshot)
+    }
+
+    pub async fn set_auto_burn_seconds(
+        &self,
+        client_id: Uuid,
+        seconds: u64,
+    ) -> Result<SessionSnapshot, AppError> {
+        if seconds > 86_400 {
+            return Err(AppError::InvalidRequest(
+                "auto-burn must be zero or no more than 86400 seconds".into(),
+            ));
+        }
+        let mut data = self.inner.write().await;
+        ensure_active_lease(&data, client_id)?;
+        data.snapshot.auto_burn_seconds = seconds;
+        data.last_activity = Instant::now();
+        let snapshot = data.snapshot.clone();
+        drop(data);
+        self.events.publish("auto_burn.setting", snapshot.clone());
+        Ok(snapshot)
+    }
+
+    pub async fn ensure_controller(&self, client_id: Uuid) -> Result<(), AppError> {
+        let data = self.inner.read().await;
+        ensure_active_lease(&data, client_id)
     }
 
     pub async fn switch_egress(
@@ -394,6 +439,7 @@ mod tests {
             runtime.path().to_path_buf(),
             EgressMode::Direct,
             StreamProfile::FullHd30,
+            1_800,
         );
         let owner = Uuid::new_v4();
         manager
@@ -426,6 +472,7 @@ mod tests {
             runtime.path().to_path_buf(),
             EgressMode::Direct,
             StreamProfile::Hd15,
+            1_800,
         );
         let owner = Uuid::new_v4();
         let original = manager
@@ -438,6 +485,38 @@ mod tests {
         assert_eq!(snapshot.phase, SessionPhase::Active);
         assert_eq!(manager.history().await.len(), 1);
         assert_eq!(browser.calls().await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn session_policy_changes_are_lease_bound_and_reset_on_burn() {
+        let runtime = tempdir().unwrap();
+        let manager = SessionManager::new(
+            EventBus::new(16),
+            Arc::new(MockBrowser::default()),
+            Arc::new(MockEgress::default()),
+            runtime.path().to_path_buf(),
+            EgressMode::Direct,
+            StreamProfile::Hd15,
+            1_800,
+        );
+        let owner = Uuid::new_v4();
+        manager
+            .start(owner, Url::parse("https://example.com").unwrap())
+            .await
+            .unwrap();
+        assert!(
+            manager
+                .set_blocklist_enabled(Uuid::new_v4(), false)
+                .await
+                .is_err()
+        );
+        manager.set_blocklist_enabled(owner, false).await.unwrap();
+        let changed = manager.set_auto_burn_seconds(owner, 300).await.unwrap();
+        assert!(!changed.blocklist_enabled);
+        assert_eq!(changed.auto_burn_seconds, 300);
+        let burned = manager.burn(owner).await.unwrap();
+        assert!(burned.blocklist_enabled);
+        assert_eq!(burned.auto_burn_seconds, 1_800);
     }
 
     #[derive(Default)]
@@ -473,6 +552,7 @@ mod tests {
             runtime.path().to_path_buf(),
             EgressMode::Direct,
             StreamProfile::Hd15,
+            1_800,
         );
         let owner = Uuid::new_v4();
         let original = manager

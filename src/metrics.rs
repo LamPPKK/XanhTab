@@ -30,12 +30,40 @@ pub struct DeviceMetrics {
     pub egress: EgressMode,
     pub blocklist_entries: usize,
     pub blocked_requests: u64,
+    pub blocklist_enabled: bool,
+    pub versions: ComponentVersions,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComponentVersions {
+    pub control_plane: String,
+    pub webkit_engine: String,
+    pub gstreamer: String,
+    pub rswebrtc: String,
+}
+
+impl Default for ComponentVersions {
+    fn default() -> Self {
+        Self {
+            control_plane: env!("CARGO_PKG_VERSION").into(),
+            webkit_engine: option_env!("XANHTAB_BUILD_WEBKIT_VERSION")
+                .unwrap_or("runtime-unknown")
+                .into(),
+            gstreamer: option_env!("XANHTAB_BUILD_GSTREAMER_VERSION")
+                .unwrap_or("runtime-unknown")
+                .into(),
+            rswebrtc: option_env!("XANHTAB_BUILD_RS_WEBRTC_VERSION")
+                .unwrap_or("runtime-unknown")
+                .into(),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct MetricsCollector {
     stream: Arc<RwLock<StreamMetrics>>,
     blocklist: Blocklist,
+    versions: ComponentVersions,
 }
 
 impl MetricsCollector {
@@ -43,6 +71,7 @@ impl MetricsCollector {
         Self {
             stream: Arc::new(RwLock::new(StreamMetrics::default())),
             blocklist,
+            versions: ComponentVersions::default(),
         }
     }
 
@@ -50,7 +79,12 @@ impl MetricsCollector {
         *self.stream.write().expect("metrics lock poisoned") = metrics;
     }
 
-    pub fn sample(&self, profile: StreamProfile, egress: EgressMode) -> DeviceMetrics {
+    pub fn sample(
+        &self,
+        profile: StreamProfile,
+        egress: EgressMode,
+        blocklist_enabled: bool,
+    ) -> DeviceMetrics {
         let (memory_total_mib, memory_available_mib) = read_memory();
         DeviceMetrics {
             sampled_at: Utc::now(),
@@ -62,6 +96,8 @@ impl MetricsCollector {
             egress,
             blocklist_entries: self.blocklist.len(),
             blocked_requests: self.blocklist.hits(),
+            blocklist_enabled,
+            versions: self.versions.clone(),
         }
     }
 }

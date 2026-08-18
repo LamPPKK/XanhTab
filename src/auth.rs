@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use data_encoding::BASE32_NOPAD;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -48,6 +49,15 @@ struct Ticket {
     client_id: Uuid,
     expires_at: Instant,
     generation: u64,
+    purpose: TicketPurpose,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketPurpose {
+    Events,
+    #[default]
+    Signaling,
 }
 
 #[derive(Debug, Clone)]
@@ -228,7 +238,11 @@ impl AuthManager {
         })
     }
 
-    pub fn issue_ticket(&self, context: &AuthContext) -> Result<Zeroizing<String>, AppError> {
+    pub fn issue_ticket(
+        &self,
+        context: &AuthContext,
+        purpose: TicketPurpose,
+    ) -> Result<Zeroizing<String>, AppError> {
         let token = Zeroizing::new(random_token().map_err(|_| AppError::Internal)?);
         let mut state = self.inner.write().expect("auth state lock poisoned");
         let generation = state.generation;
@@ -238,18 +252,26 @@ impl AuthManager {
                 client_id: context.client_id,
                 expires_at: Instant::now() + self.ticket_ttl,
                 generation,
+                purpose,
             },
         );
         Ok(token)
     }
 
-    pub fn consume_ticket(&self, token: &str) -> Result<AuthContext, AppError> {
+    pub fn consume_ticket(
+        &self,
+        token: &str,
+        expected_purpose: TicketPurpose,
+    ) -> Result<AuthContext, AppError> {
         let mut state = self.inner.write().expect("auth state lock poisoned");
         let ticket = state
             .tickets
             .remove(&hash(token.as_bytes()))
             .ok_or(AppError::Unauthorized)?;
-        if ticket.expires_at <= Instant::now() || ticket.generation != state.generation {
+        if ticket.expires_at <= Instant::now()
+            || ticket.generation != state.generation
+            || ticket.purpose != expected_purpose
+        {
             return Err(AppError::Unauthorized);
         }
         Ok(AuthContext {
@@ -330,11 +352,35 @@ mod tests {
         let context = auth
             .authenticate(Some(exchange.session_token.as_str()), None, false)
             .unwrap();
-        let ticket = auth.issue_ticket(&context).unwrap();
+        let ticket = auth
+            .issue_ticket(&context, TicketPurpose::Signaling)
+            .unwrap();
         auth.rotate_pairing().unwrap();
-        assert!(auth.consume_ticket(ticket.as_str()).is_err());
+        assert!(
+            auth.consume_ticket(ticket.as_str(), TicketPurpose::Signaling)
+                .is_err()
+        );
         assert!(
             auth.authenticate(Some(exchange.session_token.as_str()), None, false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ticket_purpose_is_bound_and_single_use() {
+        let auth = manager();
+        let pairing = auth.rotate_pairing().unwrap();
+        let exchange = auth.exchange_pairing(pairing.secret.as_str()).unwrap();
+        let context = auth
+            .authenticate(Some(exchange.session_token.as_str()), None, false)
+            .unwrap();
+        let ticket = auth.issue_ticket(&context, TicketPurpose::Events).unwrap();
+        assert!(
+            auth.consume_ticket(ticket.as_str(), TicketPurpose::Signaling)
+                .is_err()
+        );
+        assert!(
+            auth.consume_ticket(ticket.as_str(), TicketPurpose::Events)
                 .is_err()
         );
     }

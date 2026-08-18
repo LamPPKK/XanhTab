@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use axum::{
     Json, Router,
     extract::{
-        Path, Query, State, WebSocketUpgrade,
+        Path, State, WebSocketUpgrade,
+        rejection::JsonRejection,
         ws::{Message, WebSocket},
     },
     http::{HeaderMap, StatusCode, header},
@@ -16,6 +17,9 @@ use axum_extra::extract::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message as UpstreamMessage,
+};
 use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
@@ -25,7 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::AuthContext,
+    auth::{AuthContext, TicketPurpose},
     error::AppError,
     metrics::DeviceMetrics,
     model::{EgressMode, NavigationCommand, SessionPhase, SessionSnapshot, StreamProfile},
@@ -34,6 +38,7 @@ use crate::{
 
 const SESSION_COOKIE: &str = "xanhtab_session";
 const CSRF_HEADER: &str = "x-xanhtab-csrf";
+const WEBSOCKET_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn router(state: AppState) -> Router {
     let static_dir = state.config.server.static_dir.clone();
@@ -50,9 +55,12 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/session/{id}/stream-profile",
             put(set_stream_profile),
         )
+        .route("/api/v1/session/{id}/blocklist", put(set_blocklist))
+        .route("/api/v1/session/{id}/auto-burn", put(set_auto_burn))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/webrtc/ticket", post(issue_ticket))
         .route("/ws/v1/session/{id}/events", get(session_events))
+        .route("/ws/v1/session/{id}/signal", get(session_signal))
         .fallback_service(ServeDir::new(&static_dir).not_found_service(ServeFile::new(index)))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -80,6 +88,7 @@ async fn public_status(State(state): State<AppState>) -> Json<PublicStatus> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PairRequest {
     secret: String,
 }
@@ -95,8 +104,9 @@ async fn exchange_pairing(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
-    Json(request): Json<PairRequest>,
+    payload: Result<Json<PairRequest>, JsonRejection>,
 ) -> Result<(CookieJar, Json<PairResponse>), AppError> {
+    let request = parse_json(payload)?;
     validate_origin(&state, &headers)?;
     if request.secret.len() < 40 || request.secret.len() > 128 {
         return Err(AppError::InvalidPairing);
@@ -135,6 +145,7 @@ async fn get_session(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StartSessionRequest {
     url: Option<Url>,
 }
@@ -143,8 +154,9 @@ async fn start_session(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
-    Json(request): Json<StartSessionRequest>,
+    payload: Result<Json<StartSessionRequest>, JsonRejection>,
 ) -> Result<Json<SessionSnapshot>, AppError> {
+    let request = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
     let url = request.url.unwrap_or_else(|| {
         Url::parse(&state.config.session.initial_url).expect("validated initial URL")
@@ -190,8 +202,9 @@ async fn navigate(
     Path(id): Path<Uuid>,
     jar: CookieJar,
     headers: HeaderMap,
-    Json(command): Json<NavigationCommand>,
+    payload: Result<Json<NavigationCommand>, JsonRejection>,
 ) -> Result<Json<SessionSnapshot>, AppError> {
+    let command = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
     require_session_id(&state, id).await?;
     if let NavigationCommand::Navigate { url } = &command {
@@ -203,6 +216,7 @@ async fn navigate(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EgressRequest {
     mode: EgressMode,
 }
@@ -212,8 +226,9 @@ async fn set_egress(
     Path(id): Path<Uuid>,
     jar: CookieJar,
     headers: HeaderMap,
-    Json(request): Json<EgressRequest>,
+    payload: Result<Json<EgressRequest>, JsonRejection>,
 ) -> Result<Json<SessionSnapshot>, AppError> {
+    let request = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
     require_session_id(&state, id).await?;
     Ok(Json(
@@ -225,6 +240,7 @@ async fn set_egress(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StreamProfileRequest {
     profile: StreamProfile,
 }
@@ -234,14 +250,63 @@ async fn set_stream_profile(
     Path(id): Path<Uuid>,
     jar: CookieJar,
     headers: HeaderMap,
-    Json(request): Json<StreamProfileRequest>,
+    payload: Result<Json<StreamProfileRequest>, JsonRejection>,
 ) -> Result<Json<SessionSnapshot>, AppError> {
+    let request = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
     require_session_id(&state, id).await?;
     Ok(Json(
         state
             .sessions
             .set_stream_profile(context.client_id, request.profile)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlocklistRequest {
+    enabled: bool,
+}
+
+async fn set_blocklist(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    payload: Result<Json<BlocklistRequest>, JsonRejection>,
+) -> Result<Json<SessionSnapshot>, AppError> {
+    let request = parse_json(payload)?;
+    let context = authenticate(&state, &jar, &headers, true)?;
+    require_session_id(&state, id).await?;
+    Ok(Json(
+        state
+            .sessions
+            .set_blocklist_enabled(context.client_id, request.enabled)
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoBurnRequest {
+    seconds: u64,
+}
+
+async fn set_auto_burn(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    payload: Result<Json<AutoBurnRequest>, JsonRejection>,
+) -> Result<Json<SessionSnapshot>, AppError> {
+    let request = parse_json(payload)?;
+    let context = authenticate(&state, &jar, &headers, true)?;
+    require_session_id(&state, id).await?;
+    Ok(Json(
+        state
+            .sessions
+            .set_auto_burn_seconds(context.client_id, request.seconds)
             .await?,
     ))
 }
@@ -253,11 +318,11 @@ async fn metrics(
 ) -> Result<Json<DeviceMetrics>, AppError> {
     authenticate(&state, &jar, &headers, false)?;
     let snapshot = state.sessions.snapshot().await;
-    Ok(Json(
-        state
-            .metrics
-            .sample(snapshot.stream_profile, snapshot.egress),
-    ))
+    Ok(Json(state.metrics.sample(
+        snapshot.stream_profile,
+        snapshot.egress,
+        snapshot.blocklist_enabled,
+    )))
 }
 
 #[derive(Serialize)]
@@ -266,13 +331,23 @@ struct TicketResponse {
     expires_in_seconds: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TicketRequest {
+    #[serde(default)]
+    purpose: TicketPurpose,
+}
+
 async fn issue_ticket(
     State(state): State<AppState>,
     jar: CookieJar,
     headers: HeaderMap,
+    payload: Result<Json<TicketRequest>, JsonRejection>,
 ) -> Result<Json<TicketResponse>, AppError> {
+    let request = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
-    let ticket = state.auth.issue_ticket(&context)?;
+    state.sessions.ensure_controller(context.client_id).await?;
+    let ticket = state.auth.issue_ticket(&context, request.purpose)?;
     Ok(Json(TicketResponse {
         ticket: ticket.to_string(),
         expires_in_seconds: state.config.session.ticket_ttl_seconds,
@@ -280,26 +355,112 @@ async fn issue_ticket(
 }
 
 #[derive(Deserialize)]
-struct EventQuery {
+#[serde(deny_unknown_fields)]
+struct WebSocketAuthFrame {
+    #[serde(rename = "type")]
+    kind: String,
     ticket: String,
 }
 
 async fn session_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Query(query): Query<EventQuery>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
     validate_origin(&state, &headers)?;
-    let _context = state.auth.consume_ticket(&query.ticket)?;
     require_session_id(&state, id).await?;
     Ok(upgrade
-        .on_upgrade(move |socket| event_socket(socket, state))
+        .on_upgrade(move |socket| event_socket(socket, state, id))
         .into_response())
 }
 
-async fn event_socket(socket: WebSocket, state: AppState) {
+async fn session_signal(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response, AppError> {
+    validate_origin(&state, &headers)?;
+    if !state.config.signaling.enabled {
+        return Err(AppError::SignalingFailure(
+            "signaling relay is disabled".into(),
+        ));
+    }
+    require_session_id(&state, id).await?;
+    Ok(upgrade
+        .on_upgrade(move |socket| signal_socket(socket, state, id))
+        .into_response())
+}
+
+async fn signal_socket(mut socket: WebSocket, state: AppState, id: Uuid) {
+    if let Err(error) = authorize_websocket(&mut socket, &state, id, TicketPurpose::Signaling).await
+    {
+        reject_websocket(&mut socket, &error).await;
+        return;
+    }
+    let upstream = match connect_async(&state.config.signaling.upstream_uri).await {
+        Ok((upstream, _)) => upstream,
+        Err(error) => {
+            reject_websocket(&mut socket, &AppError::SignalingFailure(error.to_string())).await;
+            return;
+        }
+    };
+    relay_signaling(socket, upstream).await;
+}
+
+async fn relay_signaling(
+    socket: WebSocket,
+    upstream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+) {
+    let (mut client_sender, mut client_receiver) = socket.split();
+    let (mut upstream_sender, mut upstream_receiver) = upstream.split();
+    loop {
+        tokio::select! {
+            client = client_receiver.next() => {
+                let Some(Ok(message)) = client else { break };
+                let Some(message) = to_upstream_message(message) else { continue };
+                let closing = matches!(message, UpstreamMessage::Close(_));
+                if upstream_sender.send(message).await.is_err() || closing { break; }
+            }
+            upstream = upstream_receiver.next() => {
+                let Some(Ok(message)) = upstream else { break };
+                let Some(message) = to_client_message(message) else { continue };
+                let closing = matches!(message, Message::Close(_));
+                if client_sender.send(message).await.is_err() || closing { break; }
+            }
+        }
+    }
+    let _ = upstream_sender.close().await;
+    let _ = client_sender.close().await;
+}
+
+fn to_upstream_message(message: Message) -> Option<UpstreamMessage> {
+    match message {
+        Message::Text(value) => Some(UpstreamMessage::Text(value.to_string().into())),
+        Message::Binary(value) => Some(UpstreamMessage::Binary(value.to_vec().into())),
+        Message::Ping(value) => Some(UpstreamMessage::Ping(value.to_vec().into())),
+        Message::Pong(value) => Some(UpstreamMessage::Pong(value.to_vec().into())),
+        Message::Close(_) => Some(UpstreamMessage::Close(None)),
+    }
+}
+
+fn to_client_message(message: UpstreamMessage) -> Option<Message> {
+    match message {
+        UpstreamMessage::Text(value) => Some(Message::Text(value.to_string().into())),
+        UpstreamMessage::Binary(value) => Some(Message::Binary(value.to_vec().into())),
+        UpstreamMessage::Ping(value) => Some(Message::Ping(value.to_vec().into())),
+        UpstreamMessage::Pong(value) => Some(Message::Pong(value.to_vec().into())),
+        UpstreamMessage::Close(_) => Some(Message::Close(None)),
+        UpstreamMessage::Frame(_) => None,
+    }
+}
+
+async fn event_socket(mut socket: WebSocket, state: AppState, id: Uuid) {
+    if let Err(error) = authorize_websocket(&mut socket, &state, id, TicketPurpose::Events).await {
+        reject_websocket(&mut socket, &error).await;
+        return;
+    }
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.events.subscribe();
     let initial = serde_json::to_string(&serde_json::json!({
@@ -323,8 +484,13 @@ async fn event_socket(socket: WebSocket, state: AppState) {
             event = events.recv() => {
                 match event {
                     Ok(event) => {
+                        let close_after_send = matches!(
+                            event.session.phase,
+                            SessionPhase::Burning | SessionPhase::Idle
+                        );
                         let Ok(payload) = serde_json::to_string(&event) else { continue };
                         if sender.send(Message::Text(payload.into())).await.is_err() { break; }
+                        if close_after_send { break; }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => break,
@@ -332,6 +498,56 @@ async fn event_socket(socket: WebSocket, state: AppState) {
             }
         }
     }
+}
+
+async fn authorize_websocket(
+    socket: &mut WebSocket,
+    state: &AppState,
+    id: Uuid,
+    purpose: TicketPurpose,
+) -> Result<(), AppError> {
+    let incoming = tokio::time::timeout(WEBSOCKET_AUTH_TIMEOUT, socket.recv())
+        .await
+        .map_err(|_| AppError::Unauthorized)?
+        .ok_or(AppError::Unauthorized)?
+        .map_err(|_| AppError::Unauthorized)?;
+    let Message::Text(payload) = incoming else {
+        return Err(AppError::Unauthorized);
+    };
+    if payload.len() > 256 {
+        return Err(AppError::Unauthorized);
+    }
+    let frame: WebSocketAuthFrame =
+        serde_json::from_str(&payload).map_err(|_| AppError::Unauthorized)?;
+    if frame.kind != "authenticate" || frame.ticket.len() < 40 || frame.ticket.len() > 128 {
+        return Err(AppError::Unauthorized);
+    }
+    let context = state.auth.consume_ticket(&frame.ticket, purpose)?;
+    require_session_id(state, id).await?;
+    state.sessions.ensure_controller(context.client_id).await?;
+    socket
+        .send(Message::Text(
+            serde_json::json!({ "type": "authenticated" })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .map_err(|_| AppError::Unauthorized)
+}
+
+async fn reject_websocket(socket: &mut WebSocket, error: &AppError) {
+    let code = match error {
+        AppError::SignalingFailure(_) => "SIGNALING_UNAVAILABLE",
+        _ => "AUTH_REQUIRED",
+    };
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({ "error": { "code": code } })
+                .to_string()
+                .into(),
+        ))
+        .await;
+    let _ = socket.send(Message::Close(None)).await;
 }
 
 fn authenticate(
@@ -348,6 +564,12 @@ fn authenticate(
         .get(CSRF_HEADER)
         .and_then(|value| value.to_str().ok());
     state.auth.authenticate(session, csrf, require_csrf)
+}
+
+fn parse_json<T>(payload: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
+    payload
+        .map(|Json(value)| value)
+        .map_err(|_| AppError::InvalidRequest("malformed JSON body".into()))
 }
 
 fn validate_origin(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
@@ -436,6 +658,7 @@ mod tests {
                 std::path::PathBuf::from("/tmp/xanhtab-api-test"),
                 EgressMode::Direct,
                 StreamProfile::Hd15,
+                1_800,
             ),
             metrics: crate::metrics::MetricsCollector::new(crate::blocklist::Blocklist::default()),
             events,

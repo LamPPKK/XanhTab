@@ -11,17 +11,18 @@ use serde::{Deserialize, Serialize};
 use crate::model::{EgressMode, StreamProfile};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
     pub session: SessionConfig,
     pub browser: BrowserConfig,
+    pub signaling: SignalingConfig,
     pub network: NetworkConfig,
     pub blocklist: BlocklistConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
@@ -34,7 +35,7 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionConfig {
     pub runtime_dir: PathBuf,
     pub pairing_file: PathBuf,
@@ -46,7 +47,7 @@ pub struct SessionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BrowserConfig {
     pub enabled: bool,
     pub command: PathBuf,
@@ -55,7 +56,17 @@ pub struct BrowserConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
+pub struct SignalingConfig {
+    pub enabled: bool,
+    pub upstream_uri: String,
+    pub plugin_directory: PathBuf,
+    pub stun_config_file: Option<PathBuf>,
+    pub turn_config_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
     pub enabled: bool,
     pub initial_mode: EgressMode,
@@ -69,7 +80,7 @@ pub struct NetworkConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BlocklistConfig {
     pub fst_path: PathBuf,
     pub custom_hosts_path: PathBuf,
@@ -113,6 +124,18 @@ impl Default for BrowserConfig {
             command: PathBuf::from("/usr/local/libexec/xanhtab-browser"),
             socket: PathBuf::from("/run/xanhtab/browser.sock"),
             stop_timeout_seconds: 5,
+        }
+    }
+}
+
+impl Default for SignalingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            upstream_uri: "ws://127.0.0.1:8444".into(),
+            plugin_directory: PathBuf::from("/usr/lib/xanhtab/gstreamer-1.0"),
+            stun_config_file: None,
+            turn_config_file: None,
         }
     }
 }
@@ -202,6 +225,35 @@ impl Config {
         {
             bail!("proxy_endpoint must be an IP address and port");
         }
+        let signaling_uri = self
+            .signaling
+            .upstream_uri
+            .parse::<url::Url>()
+            .context("signaling.upstream_uri must be an absolute WebSocket URL")?;
+        if !matches!(signaling_uri.scheme(), "ws" | "wss") {
+            bail!("signaling.upstream_uri must use ws or wss");
+        }
+        let signaling_host = signaling_uri
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("signaling.upstream_uri must include a host"))?;
+        let loopback = signaling_host == "localhost"
+            || signaling_host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback());
+        if self.signaling.enabled && !loopback {
+            bail!("signaling upstream must be loopback-only");
+        }
+        if !self.signaling.plugin_directory.is_absolute() {
+            bail!("signaling.plugin_directory must be absolute");
+        }
+        for (name, path) in [
+            ("stun_config_file", &self.signaling.stun_config_file),
+            ("turn_config_file", &self.signaling.turn_config_file),
+        ] {
+            if path.as_ref().is_some_and(|path| !path.is_absolute()) {
+                bail!("signaling.{name} must be an absolute secret file reference");
+            }
+        }
         Ok(())
     }
 
@@ -236,6 +288,14 @@ mod tests {
     fn runtime_directory_cannot_be_a_broad_path() {
         let mut config = Config::default();
         config.session.runtime_dir = PathBuf::from("/");
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn signaling_upstream_must_stay_on_loopback() {
+        let mut config = Config::default();
+        config.signaling.enabled = true;
+        config.signaling.upstream_uri = "ws://192.0.2.1:8444".into();
         assert!(config.validate().is_err());
     }
 }

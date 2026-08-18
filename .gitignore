@@ -1,4 +1,5 @@
 /target/
+/dist/
 /.x0-results/
 *.pem
 *.key

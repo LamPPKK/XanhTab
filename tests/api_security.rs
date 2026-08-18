@@ -44,6 +44,7 @@ fn harness() -> Harness {
         config.session.runtime_dir.clone(),
         config.network.initial_mode,
         config.session.initial_profile,
+        config.session.auto_burn_seconds,
     );
     let auth = AuthManager::new(Duration::from_secs(600), Duration::from_secs(30));
     let pairing = auth.rotate_pairing().unwrap();
@@ -148,6 +149,29 @@ async fn pairing_is_single_use_and_mutations_require_csrf() {
 }
 
 #[tokio::test]
+async fn malformed_json_uses_a_stable_redacted_error() {
+    let harness = harness();
+    let response = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/pair/exchange")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"secret":}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = body_json(response).await;
+    assert_eq!(payload["error"]["code"], "REQUEST_INVALID");
+    assert_eq!(
+        payload["error"]["message"],
+        "invalid request: malformed JSON body"
+    );
+}
+
+#[tokio::test]
 async fn burn_clears_runtime_and_revokes_cookie() {
     let harness = harness();
     let (cookie, csrf) = pair(&harness).await;
@@ -205,4 +229,54 @@ async fn burn_clears_runtime_and_revokes_cookie() {
         .await
         .unwrap();
     assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn session_policy_endpoints_require_controller_and_csrf() {
+    let harness = harness();
+    let (cookie, csrf) = pair(&harness).await;
+    let started = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/session")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let id = body_json(started).await["id"].as_str().unwrap().to_string();
+
+    let blocklist = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::put(format!("/api/v1/session/{id}/blocklist"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(r#"{"enabled":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocklist.status(), StatusCode::OK);
+    assert_eq!(body_json(blocklist).await["blocklist_enabled"], false);
+
+    let without_csrf = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::put(format!("/api/v1/session/{id}/auto-burn"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(r#"{"seconds":300}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(without_csrf.status(), StatusCode::FORBIDDEN);
 }

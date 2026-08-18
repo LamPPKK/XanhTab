@@ -116,6 +116,10 @@ preflight() {
   grep -aq "Raspberry Pi Zero 2 W" /proc/device-tree/model || die "only Raspberry Pi Zero 2 W is supported"
   [[ -n "$PUBLIC_KEY" && -f "$PUBLIC_KEY" ]] || die "--public-key is required; obtain and verify it out-of-band"
   command -v apt-get >/dev/null || die "apt-get is unavailable"
+  local tool
+  for tool in curl jq minisign sha256sum tar zstd file; do
+    command -v "$tool" >/dev/null || die "$tool is required before any system mutation"
+  done
 }
 
 install_system_dependencies() {
@@ -124,7 +128,6 @@ install_system_dependencies() {
     nftables wireguard-tools tor
     libwpewebkit-2.0-1 gstreamer1.0-wpe gstreamer1.0-tools
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-    gstreamer1.0-plugins-rs
   )
   run apt-get update
   if [[ "$NON_INTERACTIVE" == 1 ]]; then
@@ -161,6 +164,7 @@ uninstall_xanhtab() {
     [[ ! -e "$target" ]] || run rm -f -- "$target"
   done
   [[ ! -d /usr/share/xanhtab ]] || run rm -rf -- /usr/share/xanhtab
+  [[ ! -d /usr/lib/xanhtab ]] || run rm -rf -- /usr/lib/xanhtab
   [[ ! -d /etc/xanhtab ]] || run rm -rf -- /etc/xanhtab
   run systemctl daemon-reload
   log "uninstalled; persistent blocklist and backups were retained"
@@ -175,7 +179,7 @@ download_and_verify_release() {
     return
   fi
   minisign -Vm "$manifest" -x "$signature" -p "$PUBLIC_KEY" >/dev/null
-  jq -e '.schema_version == 1 and (.version | type == "string") and (.artifacts | type == "array")' "$manifest" >/dev/null || die "invalid release manifest schema"
+  jq -e '.schema_version == 1 and (.version | type == "string") and .config_schema_version == 1 and .gstreamer_abi == "1.0" and (.component_versions.rswebrtc | type == "string") and (.artifacts | type == "array")' "$manifest" >/dev/null || die "invalid release manifest schema"
   local url expected name archive actual
   url="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .url' "$manifest")"
   expected="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .sha256' "$manifest")"
@@ -185,11 +189,25 @@ download_and_verify_release() {
   curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$url"
   actual="$(sha256sum "$archive" | awk '{print $1}')"
   [[ "$actual" == "$expected" ]] || die "release artifact checksum mismatch"
+  local member
+  while IFS= read -r member; do
+    [[ "$member" != /* && "$member" != ".." && "$member" != ../* && "$member" != */../* ]] || die "release archive contains an unsafe path"
+  done < <(tar --zstd -tf "$archive")
   install -d -m 0700 "$WORK_DIR/release"
   tar --zstd -xf "$archive" -C "$WORK_DIR/release"
-  for relative in bin/xanhtabd libexec/xanhtab-browser libexec/xanhtab-netd libexec/xanhtab-blocklist config/xanhtab.production.toml web/index.html systemd/xanhtabd.service; do
+  for relative in bin/xanhtabd libexec/xanhtab-browser libexec/xanhtab-netd libexec/xanhtab-blocklist config/xanhtab.production.toml web/index.html systemd/xanhtabd.service schemas/openapi-v1.yaml schemas/config.schema.json plugins/gstreamer-1.0/libgstrswebrtc.so checksums.sha256; do
     [[ -f "$WORK_DIR/release/$relative" ]] || die "release is missing $relative"
   done
+  (cd "$WORK_DIR/release" && sha256sum --check --strict checksums.sha256 >/dev/null) || die "release component checksum mismatch"
+  file "$WORK_DIR/release/plugins/gstreamer-1.0/libgstrswebrtc.so" | grep -Eq 'ARM aarch64|ARM64' || die "rswebrtc plugin is not an ARM64 artifact"
+}
+
+validate_runtime_abi() {
+  [[ "$DRY_RUN" == 1 ]] && return
+  GST_PLUGIN_PATH_1_0="$WORK_DIR/release/plugins/gstreamer-1.0" \
+    gst-inspect-1.0 webrtcsink >/dev/null || die "pinned rswebrtc plugin does not load with the installed GStreamer ABI"
+  GST_PLUGIN_PATH_1_0="$WORK_DIR/release/plugins/gstreamer-1.0" \
+    gst-inspect-1.0 wpesrc >/dev/null || die "wpesrc is unavailable after dependency installation"
 }
 
 sync_public_config() {
@@ -218,8 +236,8 @@ sync_public_config() {
 
 install_secrets() {
   [[ -n "$SECRETS_FILE" ]] || return 0
-  jq -e 'keys - ["proxy_url", "wireguard_config_base64"] | length == 0' "$SECRETS_FILE" >/dev/null || die "unknown key in secrets file"
-  run install -d -o root -g root -m 0700 /etc/xanhtab/secrets
+  jq -e 'keys - ["proxy_url", "stun_config_base64", "turn_config_base64", "wireguard_config_base64"] | length == 0' "$SECRETS_FILE" >/dev/null || die "unknown key in secrets file"
+  run install -d -o root -g xanhtab -m 0750 /etc/xanhtab/secrets
   if [[ "$DRY_RUN" == 1 ]]; then
     log "would install selected secret values without printing them"
     return
@@ -229,8 +247,27 @@ install_secrets() {
     jq -er '.wireguard_config_base64' "$SECRETS_FILE" | base64 --decode > /etc/xanhtab/secrets/wg0.conf
   fi
   if jq -e 'has("proxy_url")' "$SECRETS_FILE" >/dev/null; then
-    jq -er '.proxy_url | select(test("^(https?|socks5)://"))' "$SECRETS_FILE" > /etc/xanhtab/secrets/proxy-url
+    jq -er '.proxy_url | select(test("^(https?|socks5h?)://"))' "$SECRETS_FILE" > /etc/xanhtab/secrets/proxy-url
   fi
+  local ice_key ice_target
+  for ice_key in stun_config_base64 turn_config_base64; do
+    [[ "$ice_key" == "stun_config_base64" ]] && ice_target="stun.json" || ice_target="turn.json"
+    if jq -e --arg key "$ice_key" 'has($key)' "$SECRETS_FILE" >/dev/null; then
+      jq -er --arg key "$ice_key" '.[$key]' "$SECRETS_FILE" | base64 --decode > "/etc/xanhtab/secrets/$ice_target"
+      jq -e 'type == "object"' "/etc/xanhtab/secrets/$ice_target" >/dev/null || die "$ice_target must contain a JSON object"
+    fi
+  done
+  if [[ -f /etc/xanhtab/secrets/wg0.conf ]]; then
+    chown root:root /etc/xanhtab/secrets/wg0.conf
+    chmod 0600 /etc/xanhtab/secrets/wg0.conf
+  fi
+  local secret_path
+  for secret_path in /etc/xanhtab/secrets/proxy-url /etc/xanhtab/secrets/stun.json /etc/xanhtab/secrets/turn.json; do
+    if [[ -f "$secret_path" ]]; then
+      chown root:xanhtab "$secret_path"
+      chmod 0640 "$secret_path"
+    fi
+  done
 }
 
 install_release() {
@@ -239,20 +276,22 @@ install_release() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   BACKUP_DIR="$BACKUP_ROOT/install-$stamp"
   run install -d -m 0700 "$BACKUP_DIR"
-  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
+  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /usr/lib/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
     if [[ -e "$target" ]]; then run cp -a --parents "$target" "$BACKUP_DIR"; fi
   done
-  run install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/share/xanhtab/web /etc/xanhtab /etc/systemd/system /usr/lib/tmpfiles.d /usr/lib/sysusers.d
+  run install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/share/xanhtab/web /usr/lib/xanhtab/gstreamer-1.0 /etc/xanhtab /etc/systemd/system /usr/lib/tmpfiles.d /usr/lib/sysusers.d
   run install -m 0755 "$release/bin/xanhtabd" /usr/local/bin/xanhtabd
   run install -m 0755 "$release/libexec/xanhtab-browser" /usr/local/libexec/xanhtab-browser
   run install -m 0755 "$release/libexec/xanhtab-netd" /usr/local/libexec/xanhtab-netd
   run install -m 0755 "$release/libexec/xanhtab-blocklist" /usr/local/libexec/xanhtab-blocklist
   run cp -a "$release/web/." /usr/share/xanhtab/web/
+  run cp -a "$release/plugins/gstreamer-1.0/." /usr/lib/xanhtab/gstreamer-1.0/
   run install -m 0644 "$release/systemd/xanhtabd.service" /etc/systemd/system/xanhtabd.service
   run install -m 0644 "$release/systemd/xanhtab-browser.service" /etc/systemd/system/xanhtab-browser.service
   run install -m 0644 "$release/systemd/xanhtab-netd.service" /etc/systemd/system/xanhtab-netd.service
   run install -m 0644 "$release/systemd/xanhtab-tmpfiles.conf" /usr/lib/tmpfiles.d/xanhtab.conf
   run install -m 0644 "$release/systemd/xanhtab.sysusers" /usr/lib/sysusers.d/xanhtab.conf
+  run systemd-sysusers /usr/lib/sysusers.d/xanhtab.conf
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/xanhtab.toml ]]; then
     run install -m 0640 "$release/config/xanhtab.production.toml" /etc/xanhtab/xanhtab.toml
   fi
@@ -264,7 +303,6 @@ install_release() {
     fi
   fi
   install_secrets
-  run systemd-sysusers /usr/lib/sysusers.d/xanhtab.conf
   run systemd-tmpfiles --create /usr/lib/tmpfiles.d/xanhtab.conf
   if [[ "$DRY_RUN" == 0 ]]; then
     sed -i "s/^initial_mode = .*/initial_mode = \"$NETWORK\"/" /etc/xanhtab/xanhtab.toml
@@ -293,7 +331,7 @@ ensure_tls() {
 rollback_install() {
   log "health check failed; rolling back installed files"
   systemctl disable --now xanhtabd.service xanhtab-browser.service xanhtab-netd.service >/dev/null 2>&1 || true
-  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
+  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /usr/lib/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
     if [[ -d "$target" ]]; then rm -rf -- "$target"; elif [[ -e "$target" ]]; then rm -f -- "$target"; fi
   done
   if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
@@ -306,8 +344,8 @@ activate_and_healthcheck() {
   run systemctl daemon-reload
   run systemctl enable --now xanhtab-netd.service xanhtab-browser.service xanhtabd.service
   [[ "$DRY_RUN" == 1 ]] && return
-  local attempt
-  for attempt in {1..30}; do
+  local _
+  for _ in {1..30}; do
     if curl --fail --silent --show-error --cacert /etc/xanhtab/tls/server.crt https://xanhtab.local:8443/healthz >/dev/null; then
       local pairing_url
       pairing_url="$(sed -n 's/^PAIRING_URL=//p' /run/xanhtab/pairing.txt)"
@@ -330,9 +368,10 @@ if [[ "$UNINSTALL" == 1 ]]; then
   exit 0
 fi
 preflight
-install_system_dependencies
 WORK_DIR="$(mktemp -d -t xanhtab-install.XXXXXXXX)"
 download_and_verify_release
+install_system_dependencies
+validate_runtime_abi
 [[ "$DRY_RUN" == 1 ]] || sync_public_config
 install_release
 activate_and_healthcheck

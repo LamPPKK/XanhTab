@@ -22,6 +22,14 @@ pub enum AppError {
     InvalidRequest(String),
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+    #[error("dependency unavailable: {0}")]
+    DependencyFailure(String),
+    #[error("encoder unavailable: {0}")]
+    EncoderFailure(String),
+    #[error("signaling unavailable: {0}")]
+    SignalingFailure(String),
+    #[error("egress leak test failed: {0}")]
+    LeakTestFailure(String),
     #[error("internal error")]
     Internal,
 }
@@ -49,6 +57,12 @@ impl AppError {
             Self::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             Self::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "REQUEST_INVALID"),
             Self::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE"),
+            Self::DependencyFailure(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE")
+            }
+            Self::EncoderFailure(_) => (StatusCode::SERVICE_UNAVAILABLE, "ENCODER_UNAVAILABLE"),
+            Self::SignalingFailure(_) => (StatusCode::BAD_GATEWAY, "SIGNALING_UNAVAILABLE"),
+            Self::LeakTestFailure(_) => (StatusCode::BAD_GATEWAY, "LEAK_TEST_FAILED"),
             Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         }
     }

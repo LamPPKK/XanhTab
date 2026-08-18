@@ -72,6 +72,34 @@ paths:
       security: [{ sessionCookie: [], csrfHeader: [] }]
       parameters: [{ $ref: "#/components/parameters/SessionId" }]
       responses: { "200": { description: Stream profile selected } }
+  /api/v1/session/{id}/blocklist:
+    put:
+      operationId: setSessionBlocklist
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties: { enabled: { type: boolean } }
+      responses: { "200": { description: Session blocklist policy updated } }
+  /api/v1/session/{id}/auto-burn:
+    put:
+      operationId: setSessionAutoBurn
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters: [{ $ref: "#/components/parameters/SessionId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties: { seconds: { type: integer, minimum: 0, maximum: 86400 } }
+      responses: { "200": { description: Session inactivity burn threshold updated } }
   /api/v1/metrics:
     get:
       operationId: metrics
@@ -81,7 +109,29 @@ paths:
     post:
       operationId: issueWebRtcTicket
       security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [purpose]
+              properties: { purpose: { enum: [events, signaling] } }
       responses: { "200": { description: Single-use signaling ticket valid for at most five minutes } }
+  /ws/v1/session/{id}/events:
+    get:
+      operationId: sessionEventsWebSocket
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      responses: { "101": { description: Event WebSocket; the first text frame must be an authenticate object containing an events-purpose ticket } }
+  /ws/v1/session/{id}/signal:
+    get:
+      operationId: sessionSignalingWebSocket
+      parameters:
+        - { $ref: "#/components/parameters/SessionId" }
+      responses:
+        "101": { description: WebRTC signaling relay; the first text frame must be an authenticate object containing a signaling-purpose ticket }
+        "502": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: xanhtab_session }
@@ -90,4 +140,4 @@ components:
     SessionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
-      description: Stable error code and redacted message
+      description: Stable error code and redacted message. Dependency, encoder, signaling, and leak-test failures use DEPENDENCY_UNAVAILABLE, ENCODER_UNAVAILABLE, SIGNALING_UNAVAILABLE, and LEAK_TEST_FAILED.

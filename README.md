@@ -10,10 +10,10 @@ The repository contains the executable X0–X2 vertical slice, but **Gate X0 is 
 | --- | --- | --- |
 | X0 | WPE → conversion → V4L2 H.264 → `webrtcsink`, Opus branch, control DataChannel flag, 20-site/three-profile capture harness | Supply `webrtcsink`, resolve the 720p15 encoder failure, then complete the six-hour hardware run and latency/thermal/memory verdict |
 | X1 | Three services, pairing, cookie/CSRF, one controller, FSM, tmpfs cleanup, FST blocklist, RAM history, auto-burn | Pi process/socket residue audit and burn SLO measurement |
-| X2 | Responsive clientless dashboard, navigation, profile ladder, metrics, five adapter contracts, transactional process restart | Authenticated media signaling bridge and five-adapter IP/DNS/kill-switch hardware matrix |
-| X3 | Signed-manifest packaging and verified/idempotent installer structure, repair/uninstall and rollback | Signed first release, fresh-install/upgrade matrix and 24-hour fault soak |
+| X2 | Responsive clientless dashboard, navigation, session policy controls, profile ladder, version metrics, purpose-bound signaling relay, five adapter contracts, transactional nftables/process restart | End-to-end rswebrtc consumer handshake plus five-adapter IP/DNS/kill-switch hardware matrix |
+| X3 | Signed-manifest packaging with pinned ARM64 rswebrtc plugin, verified/idempotent installer structure, repair/uninstall and rollback | Signed first release, fresh-install/upgrade matrix and 24-hour fault soak |
 
-`fireball-docker`, `fireball-webkit`, and `fireball-blink` intentionally remain gated until X3.
+The three Fireball repositories may contain buildable F0 foundations, but their full product tracks remain gated until X3.
 
 ## Components
 
@@ -52,6 +52,8 @@ scripts/evaluate-x0.sh .x0-results/UTC_TIMESTAMP
 
 The evaluator only returns GO when 720p15 has less than 2% frame drop, input latency p95 below 250 ms, browser/stream below 400 MiB, at least 48 MiB available, no OOM, and no sustained throttle. If only 480p10 passes, development freezes as required.
 
+`scripts/x0-preflight-json.sh` performs read-only discovery of the Pi model, kernel, firmware, CMA, encoder/render devices, GStreamer ABI and required elements. It does not install packages or modify boot configuration.
+
 ## Verified installation
 
 Do not pipe a network response into `sudo`. Download the installer, detached signature, and trusted public key separately; verify before execution:
@@ -63,11 +65,13 @@ minisign -Vm install.sh -x install.sh.minisig -p ./xanhtab-release.pub
 sudo ./install.sh --non-interactive --public-key ./xanhtab-release.pub --network direct
 ```
 
-The installer stops before mutation on a wrong OS, architecture, or board. It verifies the signed manifest and SHA-256 of the aarch64 artifact, backs up overwritten paths, validates config, starts all services, rolls back on failed health check, and prints the QR only after health succeeds.
+The installer stops before mutation on a wrong OS, architecture, or board. Verification tools must already be installed. It downloads and verifies the signed manifest and ARM64 archive before APT mutation, rejects unsafe archive paths, validates every component checksum and the plugin architecture, then checks the plugin against the installed GStreamer ABI. It backs up overwritten paths, validates config, starts all services, rolls back on failed health check, and prints the QR only after health succeeds.
+
+For protocol consumers, `scripts/package-contract-artifact.sh 0.1.0-dev.1` creates an explicitly unsigned development artifact containing OpenAPI, config/release schemas, the web client and checksums. It is not a production release.
 
 For Git-backed public configuration, both `--config-repo` and immutable `--config-ref` are required. Only `config.json`, `custom_hosts.txt`, `bookmarks.json`, and `blocklist-metadata.json` are copied, each with a repository checksum and a 1 MiB limit. Secrets never come from that repository.
 
-`--secrets-file` accepts root-owned mode-0600 JSON with only `wireguard_config_base64` and `proxy_url`. Values are not logged. WARP is encrypted egress, not anonymity; Tor uses remote DNS and a kill-switch contract.
+`--secrets-file` accepts root-owned mode-0600 JSON with only `wireguard_config_base64`, `proxy_url`, `stun_config_base64`, and `turn_config_base64`. Values are not logged; ICE files remain root-owned references and are not embedded in public config. WARP is encrypted egress, not anonymity; Tor uses remote DNS and a kill-switch contract.
 
 ## Security and scope
 

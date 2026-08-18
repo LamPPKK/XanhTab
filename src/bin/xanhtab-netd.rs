@@ -118,28 +118,49 @@ fn reset_wireguard_plan(config: &NetworkConfig) -> Vec<CommandSpec> {
     vec![CommandSpec {
         program: "wg-quick",
         args: vec!["down".into(), config.wireguard_config.display().to_string()],
+        stdin: None,
     }]
 }
 
-async fn run_plan(plan: &[CommandSpec], dry_run: bool, allow_delete_missing: bool) -> Result<()> {
+async fn run_plan(plan: &[CommandSpec], dry_run: bool, allow_existing_table: bool) -> Result<()> {
     for spec in plan {
         info!(program = spec.program, args = ?spec.args, dry_run, "egress command");
         if dry_run {
             continue;
         }
-        let output = Command::new(spec.program)
+        let mut command = Command::new(spec.program);
+        command
             .args(&spec.args)
-            .stdin(Stdio::null())
-            .output()
-            .await
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.stdin(if spec.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+        let mut child = command
+            .spawn()
             .with_context(|| format!("failed to run {}", spec.program))?;
+        if let Some(input) = &spec.stdin {
+            child
+                .stdin
+                .take()
+                .context("command stdin unavailable")?
+                .write_all(input.as_bytes())
+                .await?;
+        }
+        let output = child
+            .wait_with_output()
+            .await
+            .with_context(|| format!("failed to wait for {}", spec.program))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let ignorable_delete = allow_delete_missing
-                && spec.args.first().is_some_and(|arg| arg == "delete")
-                && stderr.contains("No such file or directory");
-            if ignorable_delete {
-                warn!(%stderr, "ignoring absent XanhTab nft table");
+            let ignorable_existing_table = allow_existing_table
+                && spec.program == "nft"
+                && spec.args == ["add", "table", "inet", "xanhtab"]
+                && stderr.contains("File exists");
+            if ignorable_existing_table {
+                warn!(%stderr, "reusing existing XanhTab nft table before atomic replacement");
                 continue;
             }
             anyhow::bail!("{} failed: {}", spec.program, stderr.trim());

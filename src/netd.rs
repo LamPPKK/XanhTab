@@ -36,6 +36,7 @@ pub struct EgressResponse {
 pub struct CommandSpec {
     pub program: &'static str,
     pub args: Vec<String>,
+    pub stdin: Option<String>,
 }
 
 #[async_trait]
@@ -123,132 +124,78 @@ impl EgressBackend for MockEgress {
 }
 
 pub fn command_plan(config: &NetworkConfig, mode: EgressMode) -> Vec<CommandSpec> {
-    let uid = config.browser_uid.to_string();
-    let mut plan = reset_firewall_plan();
+    let mut plan = vec![CommandSpec {
+        program: "nft",
+        args: vec![
+            "add".into(),
+            "table".into(),
+            "inet".into(),
+            "xanhtab".into(),
+        ],
+        stdin: None,
+    }];
     match mode {
-        EgressMode::Direct => {}
-        EgressMode::Tor => plan.extend(proxy_guard(uid, "127.0.0.1", 9050)),
-        EgressMode::Warp => plan.extend(proxy_guard(uid, "127.0.0.1", 40000)),
+        EgressMode::Direct | EgressMode::Tor | EgressMode::Warp | EgressMode::Proxy => {}
         EgressMode::WireGuard => {
             plan.push(CommandSpec {
                 program: "wg-quick",
                 args: vec!["up".into(), config.wireguard_config.display().to_string()],
+                stdin: None,
             });
-            plan.extend(interface_guard(uid, "wg0"));
         }
+    }
+    plan.push(nft_transaction(config, mode));
+    plan
+}
+
+fn nft_transaction(config: &NetworkConfig, mode: EgressMode) -> CommandSpec {
+    let uid = config.browser_uid;
+    let mut script = String::from(
+        "flush table inet xanhtab\n\
+         add chain inet xanhtab browser_output { type filter hook output priority filter; policy accept; }\n",
+    );
+    match mode {
+        EgressMode::Direct => {}
+        EgressMode::Tor => add_proxy_guard(&mut script, uid, "127.0.0.1", 9050),
+        EgressMode::Warp => add_proxy_guard(&mut script, uid, "127.0.0.1", 40000),
         EgressMode::Proxy => {
             let endpoint = config
                 .proxy_endpoint
                 .parse::<std::net::SocketAddr>()
                 .expect("validated proxy endpoint");
-            plan.extend(proxy_guard(
+            add_proxy_guard(
+                &mut script,
                 uid,
                 &endpoint.ip().to_string(),
                 endpoint.port(),
+            );
+        }
+        EgressMode::WireGuard => {
+            script.push_str(&format!(
+                "add rule inet xanhtab browser_output meta skuid {uid} oifname \"wg0\" accept\n"
             ));
+            add_drop(&mut script, uid);
         }
     }
-    plan
-}
-
-pub fn reset_firewall_plan() -> Vec<CommandSpec> {
-    vec![
-        CommandSpec {
-            program: "nft",
-            args: vec![
-                "delete".into(),
-                "table".into(),
-                "inet".into(),
-                "xanhtab".into(),
-            ],
-        },
-        CommandSpec {
-            program: "nft",
-            args: vec![
-                "add".into(),
-                "table".into(),
-                "inet".into(),
-                "xanhtab".into(),
-            ],
-        },
-        CommandSpec {
-            program: "nft",
-            args: vec![
-                "add".into(),
-                "chain".into(),
-                "inet".into(),
-                "xanhtab".into(),
-                "browser_output".into(),
-                "{ type filter hook output priority filter; policy accept; }".into(),
-            ],
-        },
-    ]
-}
-
-fn proxy_guard(uid: String, address: &str, port: u16) -> Vec<CommandSpec> {
-    vec![
-        CommandSpec {
-            program: "nft",
-            args: vec![
-                "add".into(),
-                "rule".into(),
-                "inet".into(),
-                "xanhtab".into(),
-                "browser_output".into(),
-                "meta".into(),
-                "skuid".into(),
-                uid.clone(),
-                "ip".into(),
-                "daddr".into(),
-                address.into(),
-                "tcp".into(),
-                "dport".into(),
-                port.to_string(),
-                "accept".into(),
-            ],
-        },
-        browser_drop(uid),
-    ]
-}
-
-fn interface_guard(uid: String, interface: &str) -> Vec<CommandSpec> {
-    vec![
-        CommandSpec {
-            program: "nft",
-            args: vec![
-                "add".into(),
-                "rule".into(),
-                "inet".into(),
-                "xanhtab".into(),
-                "browser_output".into(),
-                "meta".into(),
-                "skuid".into(),
-                uid.clone(),
-                "oifname".into(),
-                interface.into(),
-                "accept".into(),
-            ],
-        },
-        browser_drop(uid),
-    ]
-}
-
-fn browser_drop(uid: String) -> CommandSpec {
     CommandSpec {
         program: "nft",
-        args: vec![
-            "add".into(),
-            "rule".into(),
-            "inet".into(),
-            "xanhtab".into(),
-            "browser_output".into(),
-            "meta".into(),
-            "skuid".into(),
-            uid,
-            "counter".into(),
-            "drop".into(),
-        ],
+        args: vec!["-f".into(), "-".into()],
+        stdin: Some(script),
     }
+}
+
+fn add_proxy_guard(script: &mut String, uid: u32, address: &str, port: u16) {
+    let family = if address.contains(':') { "ip6" } else { "ip" };
+    script.push_str(&format!(
+        "add rule inet xanhtab browser_output meta skuid {uid} {family} daddr {address} tcp dport {port} accept\n"
+    ));
+    add_drop(script, uid);
+}
+
+fn add_drop(script: &mut String, uid: u32) {
+    script.push_str(&format!(
+        "add rule inet xanhtab browser_output meta skuid {uid} counter drop\n"
+    ));
 }
 
 #[cfg(test)]
@@ -271,6 +218,21 @@ mod tests {
                 assert_ne!(command.program, "bash");
             }
         }
+    }
+
+    #[test]
+    fn firewall_policy_is_one_nft_transaction() {
+        let config = NetworkConfig::default();
+        let plan = command_plan(&config, EgressMode::Tor);
+        let nft = plan
+            .iter()
+            .filter(|command| command.program == "nft" && command.stdin.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(nft.len(), 1);
+        let script = nft[0].stdin.as_ref().unwrap();
+        assert!(script.contains("flush table inet xanhtab"));
+        assert!(script.contains("tcp dport 9050 accept"));
+        assert!(script.contains("counter drop"));
     }
 
     #[test]

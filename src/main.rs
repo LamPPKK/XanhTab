@@ -69,6 +69,7 @@ async fn main() -> Result<()> {
         config.session.runtime_dir.clone(),
         config.network.initial_mode,
         config.session.initial_profile,
+        config.session.auto_burn_seconds,
     );
     let auth = AuthManager::new(config.auth_ttl(), config.ticket_ttl());
     let pairing = auth.rotate_pairing()?;
@@ -113,18 +114,15 @@ async fn main() -> Result<()> {
 }
 
 fn spawn_auto_burn(state: AppState) {
-    let threshold = Duration::from_secs(state.config.session.auto_burn_seconds);
-    if threshold.is_zero() {
-        warn!("auto-burn is disabled by configuration");
-        return;
-    }
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             let snapshot = state.sessions.snapshot().await;
+            let threshold = Duration::from_secs(snapshot.auto_burn_seconds);
             if snapshot.phase != xanhtab::model::SessionPhase::Active
+                || threshold.is_zero()
                 || state.sessions.idle_for().await < threshold
             {
                 continue;
