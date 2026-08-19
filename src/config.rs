@@ -1,7 +1,7 @@
 use std::{
     fs,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::Duration,
 };
 
@@ -185,13 +185,79 @@ impl Config {
         if !matches!(public_url.scheme(), "http" | "https") || public_url.host_str().is_none() {
             bail!("public_base_url must be an HTTP(S) origin");
         }
+        if public_url.path() != "/"
+            || public_url.query().is_some()
+            || public_url.fragment().is_some()
+            || !public_url.username().is_empty()
+            || public_url.password().is_some()
+        {
+            bail!("public_base_url must not contain credentials, path, query, or fragment");
+        }
         if self.server.public_base_url.starts_with("http://") && !self.server.allow_insecure_http {
             bail!("insecure public_base_url requires allow_insecure_http=true");
+        }
+        if self.server.tls_cert.is_some() != self.server.tls_key.is_some() {
+            bail!("TLS certificate and key must be configured together");
+        }
+        for (name, path) in [
+            ("tls_cert", &self.server.tls_cert),
+            ("tls_key", &self.server.tls_key),
+        ] {
+            if path.as_ref().is_some_and(|path| !path.is_absolute()) {
+                bail!("server.{name} must be an absolute path");
+            }
         }
         if !self.server.allow_insecure_http
             && (self.server.tls_cert.is_none() || self.server.tls_key.is_none())
         {
             bail!("TLS certificate and key are required outside development mode");
+        }
+        let public_origin = public_url.origin().ascii_serialization();
+        let mut normalized_origins = Vec::with_capacity(self.server.allowed_origins.len());
+        for origin in &self.server.allowed_origins {
+            let parsed = origin
+                .parse::<url::Url>()
+                .with_context(|| format!("allowed origin is not an absolute URL: {origin}"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                bail!("allowed origins must be HTTP(S) origins without credentials or paths");
+            }
+            normalized_origins.push(parsed.origin().ascii_serialization());
+        }
+        if !normalized_origins
+            .iter()
+            .any(|origin| origin == &public_origin)
+        {
+            bail!("allowed_origins must include the public_base_url origin");
+        }
+
+        if self.server.allow_insecure_http {
+            let public_host_is_loopback = public_url.host_str().is_some_and(is_loopback_host);
+            if !self.server.listen.ip().is_loopback() || !public_host_is_loopback {
+                bail!("development mode must stay on loopback");
+            }
+        } else {
+            if public_url.scheme() != "https" {
+                bail!("production public_base_url must use HTTPS");
+            }
+            if !self.server.secure_cookies {
+                bail!("production requires secure cookies");
+            }
+            if !self.browser.enabled || !self.network.enabled || !self.signaling.enabled {
+                bail!("production requires browser, network, and signaling backends");
+            }
+            if normalized_origins
+                .iter()
+                .any(|origin| !origin.starts_with("https://"))
+            {
+                bail!("production allowed_origins must use HTTPS");
+            }
         }
         if self.session.auth_ttl_seconds < 300 {
             bail!("auth_ttl_seconds must be at least 300");
@@ -202,17 +268,34 @@ impl Config {
         if self.network.browser_uid == 0 {
             bail!("browser_uid must not be root");
         }
-        if !self.session.runtime_dir.is_absolute()
+        if !is_normalized_absolute(&self.session.runtime_dir)
             || self.session.runtime_dir == Path::new("/")
             || self.session.runtime_dir.components().count() < 3
         {
-            bail!("runtime_dir must be a specific absolute directory");
+            bail!("runtime_dir must be a specific normalized absolute directory");
         }
-        if !self.session.pairing_file.is_absolute()
-            || !self.browser.socket.is_absolute()
-            || !self.network.netd_socket.is_absolute()
+        if !is_normalized_absolute(&self.session.pairing_file)
+            || !is_normalized_absolute(&self.browser.socket)
+            || !is_normalized_absolute(&self.network.netd_socket)
         {
-            bail!("pairing and service socket paths must be absolute");
+            bail!("pairing and service socket paths must be normalized absolute paths");
+        }
+        if !self.server.allow_insecure_http {
+            for (name, path) in [
+                ("session.runtime_dir", &self.session.runtime_dir),
+                ("session.pairing_file", &self.session.pairing_file),
+                ("browser.socket", &self.browser.socket),
+                ("network.netd_socket", &self.network.netd_socket),
+            ] {
+                if !path.starts_with("/run") {
+                    bail!("production {name} must stay under /run");
+                }
+            }
+            if !is_normalized_absolute(&self.server.static_dir)
+                || !is_normalized_absolute(&self.browser.command)
+            {
+                bail!("production static_dir and browser command must be absolute paths");
+            }
         }
         if self.session.initial_url.parse::<url::Url>().is_err() {
             bail!("initial_url must be an absolute URL");
@@ -236,10 +319,7 @@ impl Config {
         let signaling_host = signaling_uri
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("signaling.upstream_uri must include a host"))?;
-        let loopback = signaling_host == "localhost"
-            || signaling_host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback());
+        let loopback = is_loopback_host(signaling_host);
         if self.signaling.enabled && !loopback {
             bail!("signaling upstream must be loopback-only");
         }
@@ -266,6 +346,24 @@ impl Config {
     }
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    unbracketed == "localhost"
+        || unbracketed
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn is_normalized_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +387,9 @@ mod tests {
         let mut config = Config::default();
         config.session.runtime_dir = PathBuf::from("/");
         assert!(config.validate().is_err());
+
+        config.session.runtime_dir = PathBuf::from("/run/xanhtab/../../etc");
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -296,6 +397,63 @@ mod tests {
         let mut config = Config::default();
         config.signaling.enabled = true;
         config.signaling.upstream_uri = "ws://192.0.2.1:8444".into();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn development_mode_must_stay_on_loopback() {
+        let mut config = Config::default();
+        config.server.listen = "0.0.0.0:8088".parse().unwrap();
+        config.server.public_base_url = "http://192.0.2.1:8088".into();
+        config.server.allowed_origins = vec!["http://192.0.2.1:8088".into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn ipv6_loopback_is_accepted_for_development_and_signaling() {
+        let mut config = Config::default();
+        config.server.listen = "[::1]:8088".parse().unwrap();
+        config.server.public_base_url = "http://[::1]:8088".into();
+        config.server.allowed_origins = vec!["http://[::1]:8088".into()];
+        config.signaling.enabled = true;
+        config.signaling.upstream_uri = "ws://[::1]:8444".into();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn production_refuses_mock_backends_and_insecure_cookies() {
+        let mut config = Config::default();
+        config.server.allow_insecure_http = false;
+        config.server.public_base_url = "https://xanhtab.local:8443".into();
+        config.server.allowed_origins = vec!["https://xanhtab.local:8443".into()];
+        config.server.tls_cert = Some(PathBuf::from("/etc/xanhtab/tls/server.crt"));
+        config.server.tls_key = Some(PathBuf::from("/etc/xanhtab/tls/server.key"));
+        config.server.static_dir = PathBuf::from("/usr/share/xanhtab/web");
+        assert!(config.validate().is_err());
+
+        config.server.secure_cookies = true;
+        assert!(config.validate().is_err());
+
+        config.browser.enabled = true;
+        config.network.enabled = true;
+        config.signaling.enabled = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn public_origin_must_be_explicitly_allowlisted() {
+        let mut config = Config::default();
+        config.server.allowed_origins = vec!["http://localhost:8088".into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn tls_paths_must_be_paired_and_absolute() {
+        let mut config = Config::default();
+        config.server.tls_cert = Some(PathBuf::from("server.crt"));
+        assert!(config.validate().is_err());
+
+        config.server.tls_key = Some(PathBuf::from("/etc/xanhtab/server.key"));
         assert!(config.validate().is_err());
     }
 }

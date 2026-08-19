@@ -9,7 +9,7 @@ The repository contains the executable X0–X2 vertical slice, but **Gate X0 is 
 | Gate | Implemented here | Remaining go/no-go evidence |
 | --- | --- | --- |
 | X0 | WPE → conversion → V4L2 H.264 → `webrtcsink`, Opus branch, control DataChannel flag, 20-site/three-profile capture harness | Supply `webrtcsink`, resolve the 720p15 encoder failure, then complete the six-hour hardware run and latency/thermal/memory verdict |
-| X1 | Three services, pairing, cookie/CSRF, one controller, FSM, tmpfs cleanup, FST blocklist, RAM history, auto-burn | Pi process/socket residue audit and burn SLO measurement |
+| X1 | Three services, pairing, cookie/CSRF, one controller, FSM, tmpfs cleanup, FST blocklist, RAM history, auto-burn, and a redacted device-side burn audit | Run the packaged audit on Pi and retain a passing process/socket/auth/SLO report |
 | X2 | Responsive clientless dashboard, navigation, session policy controls, profile ladder, version metrics, purpose-bound signaling relay, five adapter contracts, transactional nftables/process restart | End-to-end rswebrtc consumer handshake plus five-adapter IP/DNS/kill-switch hardware matrix |
 | X3 | Signed-manifest packaging with pinned ARM64 rswebrtc plugin, verified/idempotent installer structure, repair/uninstall and rollback | Signed first release, fresh-install/upgrade matrix and 24-hour fault soak |
 
@@ -35,6 +35,18 @@ cargo run --bin xanhtabd -- --config config/xanhtab.toml
 ```
 
 Open `http://127.0.0.1:8088`, then read the development pairing material from `/tmp/xanhtab-pairing.txt`. Development HTTP, mock browser, and mock egress are explicit in `config/xanhtab.toml`; production configuration refuses missing TLS.
+
+Insecure development HTTP is restricted to loopback. A production configuration must use HTTPS and secure cookies, must explicitly allowlist its public origin, and must enable the real browser, network, and signaling backends. The daemon therefore fails closed instead of silently selecting mock implementations in production.
+
+## Gate X1 burn audit
+
+After installing a signed candidate on the Pi, run the packaged audit locally as root:
+
+```sh
+sudo /usr/local/libexec/xanhtab-x1-burn-audit
+```
+
+The audit pairs once, starts a session, proves that at least one session process appears in the browser service cgroup, then burns it. It verifies that the frozen pre-burn cookie is rejected, the public phase returns to `idle`, pairing material rotates, `/run/xanhtab-session` contains no file or socket, and no session process remains in that cgroup. It also enforces the measured burn SLO of less than five seconds. Secrets are passed through root-only files rather than process arguments. The redacted report is atomically written to `/run/xanhtab/x1-burn-audit.json` and follows [`schemas/burn-audit.schema.json`](schemas/burn-audit.schema.json); it contains no pairing secret, cookie, ticket, CSRF value, URL, or browsing history. If an intermediate check fails, the audit attempts an emergency burn and retains its root-only recovery material under `/run` only when cleanup cannot be confirmed. A passing report is required evidence, but does not replace the separate hardware X0 result.
 
 ## Gate X0 on hardware
 
@@ -65,7 +77,7 @@ minisign -Vm install.sh -x install.sh.minisig -p ./xanhtab-release.pub
 sudo ./install.sh --non-interactive --public-key ./xanhtab-release.pub --network direct
 ```
 
-The installer stops before mutation on a wrong OS, architecture, or board. Verification tools must already be installed. It downloads and verifies the signed manifest and ARM64 archive before APT mutation, rejects unsafe archive paths, validates every component checksum and the plugin architecture, then checks the plugin against the installed GStreamer ABI. It backs up overwritten paths, validates config, starts all services, rolls back on failed health check, and prints the QR only after health succeeds.
+The installer stops before mutation on a wrong OS, architecture, or board. Verification tools must already be installed. It downloads and verifies the signed manifest and ARM64 archive before APT mutation, rejects unsafe archive paths and symlinks, validates every component checksum and the plugin architecture, then checks the plugin against the installed GStreamer ABI. Before replacing product files it records service enable/running state and backs up all XanhTab-owned paths, including `/var/lib/xanhtab`. Any later failure restores those paths and service states; newly installed APT dependencies and newly allocated system accounts are deliberately outside that rollback boundary. The installer validates config, starts all services, and prints the QR only after health succeeds.
 
 For protocol consumers, `scripts/package-contract-artifact.sh 0.1.0-dev.1` creates an explicitly unsigned development artifact containing OpenAPI, config/release schemas, the web client and checksums. It is not a production release.
 

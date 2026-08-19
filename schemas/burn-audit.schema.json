@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireball.example/schemas/xanhtab-burn-audit-v1.json",
+  "title": "XanhTab Gate X1 burn audit v1",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "passed": { "const": true } },
+        "required": ["passed"]
+      },
+      "then": {
+        "properties": {
+          "observations": {
+            "properties": {
+              "burn_http_status": { "const": 200 },
+              "stale_cookie_http_status": { "const": 401 },
+              "runtime_entries": { "const": 0 },
+              "runtime_sockets": { "const": 0 },
+              "browser_session_processes_before_burn": { "minimum": 1 },
+              "browser_session_processes_after_burn": { "const": 0 }
+            }
+          },
+          "checks": {
+            "properties": {
+              "burn_completed": { "const": true },
+              "phase_idle": { "const": true },
+              "stale_cookie_rejected": { "const": true },
+              "runtime_empty": { "const": true },
+              "browser_process_tree_observed": { "const": true },
+              "browser_process_tree_stopped": { "const": true },
+              "pairing_rotated": { "const": true },
+              "burn_slo_met": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "schema_version",
+    "captured_at",
+    "base_origin",
+    "browser_service",
+    "burn_slo_ms",
+    "burn_duration_ms",
+    "observations",
+    "checks",
+    "passed"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "base_origin": { "type": "string", "pattern": "^https://[^/?#@]+$" },
+    "browser_service": { "type": "string", "minLength": 1 },
+    "burn_slo_ms": { "type": "integer", "minimum": 1 },
+    "burn_duration_ms": { "type": "integer", "minimum": 0 },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "burn_http_status",
+        "stale_cookie_http_status",
+        "runtime_entries",
+        "runtime_sockets",
+        "browser_session_processes_before_burn",
+        "browser_session_processes_after_burn"
+      ],
+      "properties": {
+        "burn_http_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "stale_cookie_http_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "runtime_entries": { "type": "integer", "minimum": 0 },
+        "runtime_sockets": { "type": "integer", "minimum": 0 },
+        "browser_session_processes_before_burn": { "type": "integer", "minimum": 0 },
+        "browser_session_processes_after_burn": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "burn_completed",
+        "phase_idle",
+        "stale_cookie_rejected",
+        "runtime_empty",
+        "browser_process_tree_observed",
+        "browser_process_tree_stopped",
+        "pairing_rotated",
+        "burn_slo_met"
+      ],
+      "properties": {
+        "burn_completed": { "type": "boolean" },
+        "phase_idle": { "type": "boolean" },
+        "stale_cookie_rejected": { "type": "boolean" },
+        "runtime_empty": { "type": "boolean" },
+        "browser_process_tree_observed": { "type": "boolean" },
+        "browser_process_tree_stopped": { "type": "boolean" },
+        "pairing_rotated": { "type": "boolean" },
+        "burn_slo_met": { "type": "boolean" }
+      }
+    },
+    "passed": { "type": "boolean" }
+  }
+}

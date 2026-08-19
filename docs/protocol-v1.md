@@ -30,6 +30,8 @@ The state machine is `idle → starting → active → burning → idle`; an obs
 
 If any cleanup step fails, all remaining cleanup steps are still attempted and the session moves to `failed`, never falsely to `idle`.
 
+The signed appliance archive includes `xanhtab-x1-burn-audit`. It exercises this lifecycle through the public API and observes the browser service cgroup before and after Burn. Its schema-v1 JSON output is ephemeral under `/run`, redacts all session material, and only passes after a session process was observed, the frozen pre-burn cookie is rejected, pairing rotates, runtime residue is zero, no session process remains, the phase is `idle`, and Burn completes below the five-second SLO. Authentication material is kept in root-only files rather than argv; an interrupted audit attempts an emergency Burn and preserves recovery material only if cleanup cannot be confirmed. Ticket revocation remains covered by the control-plane integration test because the audit never writes a WebSocket ticket to its report.
+
 ## Public HTTP surface
 
 The machine-readable definition is [`schemas/openapi-v1.yaml`](../schemas/openapi-v1.yaml). It includes pairing exchange, create/status/burn, navigation, egress selection, stream profile, per-session blocklist and auto-burn settings, versioned metrics, purpose-bound ticket issuance, the event WebSocket, and the authenticated signaling WebSocket. Navigation accepts only `http`, `https`, and the internal `xanhtab` scheme. Popup policy remains one-view-only.

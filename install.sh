@@ -17,6 +17,30 @@ MANIFEST_URL="$DEFAULT_MANIFEST_URL"
 PUBLIC_KEY=""
 WORK_DIR=""
 BACKUP_DIR=""
+MUTATION_STARTED=0
+FILES_MUTATED=0
+INSTALL_COMMITTED=0
+ROLLBACK_ACTIVE=0
+SERVICE_UNITS=(xanhtab-netd.service xanhtab-browser.service xanhtabd.service)
+STOP_UNITS=(xanhtabd.service xanhtab-browser.service xanhtab-netd.service)
+INSTALL_TARGETS=(
+  /usr/local/bin/xanhtabd
+  /usr/local/libexec/xanhtab-browser
+  /usr/local/libexec/xanhtab-netd
+  /usr/local/libexec/xanhtab-blocklist
+  /usr/local/libexec/xanhtab-x1-burn-audit
+  /usr/share/xanhtab
+  /usr/lib/xanhtab
+  /etc/xanhtab
+  /var/lib/xanhtab
+  /etc/systemd/system/xanhtabd.service
+  /etc/systemd/system/xanhtab-browser.service
+  /etc/systemd/system/xanhtab-netd.service
+  /usr/lib/tmpfiles.d/xanhtab.conf
+  /usr/lib/sysusers.d/xanhtab.conf
+)
+PREVIOUS_ENABLED=()
+PREVIOUS_ACTIVE=()
 
 usage() {
   printf '%s\n' \
@@ -66,9 +90,18 @@ run() {
 }
 
 cleanup() {
+  local status=$?
+  trap - EXIT
+  if [[ "$MUTATION_STARTED" == 1 && "$INSTALL_COMMITTED" == 0 ]] \
+    && declare -F rollback_install >/dev/null; then
+    if ! rollback_install; then
+      [[ "$status" != 0 ]] || status=1
+    fi
+  fi
   if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     rm -rf -- "$WORK_DIR"
   fi
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -91,6 +124,7 @@ done
 
 validate_arguments() {
   [[ "$NETWORK" =~ ^(direct|tor|warp|wireguard|proxy)$ ]] || die "unsupported network mode: $NETWORK"
+  [[ "$MANIFEST_URL" =~ ^https:// ]] || die "--manifest-url must use HTTPS"
   if [[ -n "$CONFIG_REPO" || -n "$CONFIG_REF" ]]; then
     [[ -n "$CONFIG_REPO" && -n "$CONFIG_REF" ]] || die "--config-repo and --config-ref must be used together"
     [[ "$CONFIG_REF" =~ ^[0-9a-fA-F]{40}$ || "$CONFIG_REF" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([._-][A-Za-z0-9.-]+)?$ ]] || die "--config-ref must be a release tag or full commit SHA"
@@ -117,7 +151,7 @@ preflight() {
   [[ -n "$PUBLIC_KEY" && -f "$PUBLIC_KEY" ]] || die "--public-key is required; obtain and verify it out-of-band"
   command -v apt-get >/dev/null || die "apt-get is unavailable"
   local tool
-  for tool in curl jq minisign sha256sum tar zstd file; do
+  for tool in curl jq minisign sha256sum tar zstd file find; do
     command -v "$tool" >/dev/null || die "$tool is required before any system mutation"
   done
 }
@@ -156,6 +190,7 @@ uninstall_xanhtab() {
     /usr/local/libexec/xanhtab-browser \
     /usr/local/libexec/xanhtab-netd \
     /usr/local/libexec/xanhtab-blocklist \
+    /usr/local/libexec/xanhtab-x1-burn-audit \
     /etc/systemd/system/xanhtabd.service \
     /etc/systemd/system/xanhtab-browser.service \
     /etc/systemd/system/xanhtab-netd.service \
@@ -184,6 +219,8 @@ download_and_verify_release() {
   url="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .url' "$manifest")"
   expected="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .sha256' "$manifest")"
   name="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .name' "$manifest")"
+  [[ "$url" =~ ^https:// ]] || die "release artifact URL must use HTTPS"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$name" != "." && "$name" != ".." ]] || die "invalid release artifact name"
   [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "invalid artifact checksum"
   archive="$WORK_DIR/$name"
   curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$url"
@@ -191,11 +228,33 @@ download_and_verify_release() {
   [[ "$actual" == "$expected" ]] || die "release artifact checksum mismatch"
   local member
   while IFS= read -r member; do
-    [[ "$member" != /* && "$member" != ".." && "$member" != ../* && "$member" != */../* ]] || die "release archive contains an unsafe path"
+    [[ "$member" != /* && "$member" != ".." && "$member" != ../* \
+      && "$member" != */../* && "$member" != */.. ]] || die "release archive contains an unsafe path"
   done < <(tar --zstd -tf "$archive")
   install -d -m 0700 "$WORK_DIR/release"
   tar --zstd -xf "$archive" -C "$WORK_DIR/release"
-  for relative in bin/xanhtabd libexec/xanhtab-browser libexec/xanhtab-netd libexec/xanhtab-blocklist config/xanhtab.production.toml web/index.html systemd/xanhtabd.service schemas/openapi-v1.yaml schemas/config.schema.json plugins/gstreamer-1.0/libgstrswebrtc.so checksums.sha256; do
+  [[ -z "$(find "$WORK_DIR/release" -type l -print -quit)" ]] || die "release archive must not contain symbolic links"
+  for relative in \
+    bin/xanhtabd \
+    libexec/xanhtab-browser \
+    libexec/xanhtab-netd \
+    libexec/xanhtab-blocklist \
+    libexec/xanhtab-x1-burn-audit \
+    config/xanhtab.production.toml \
+    config/custom_hosts.txt \
+    web/index.html \
+    web/internal-home.html \
+    systemd/xanhtabd.service \
+    systemd/xanhtab-browser.service \
+    systemd/xanhtab-netd.service \
+    systemd/xanhtab-tmpfiles.conf \
+    systemd/xanhtab.sysusers \
+    schemas/openapi-v1.yaml \
+    schemas/config.schema.json \
+    schemas/release-manifest.schema.json \
+    schemas/burn-audit.schema.json \
+    plugins/gstreamer-1.0/libgstrswebrtc.so \
+    checksums.sha256; do
     [[ -f "$WORK_DIR/release/$relative" ]] || die "release is missing $relative"
   done
   (cd "$WORK_DIR/release" && sha256sum --check --strict checksums.sha256 >/dev/null) || die "release component checksum mismatch"
@@ -274,16 +333,35 @@ install_release() {
   local release="$WORK_DIR/release"
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  BACKUP_DIR="$BACKUP_ROOT/install-$stamp"
-  run install -d -m 0700 "$BACKUP_DIR"
-  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /usr/lib/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
+
+  if [[ "$DRY_RUN" == 0 ]]; then
+    capture_service_state
+    MUTATION_STARTED=1
+    local unit
+    for unit in "${STOP_UNITS[@]}"; do
+      if systemctl is-active --quiet "$unit" 2>/dev/null; then
+        systemctl stop "$unit"
+      fi
+    done
+    install -d -m 0700 "$BACKUP_ROOT"
+    BACKUP_DIR="$(mktemp -d "$BACKUP_ROOT/install-$stamp.XXXXXX")"
+    chmod 0700 "$BACKUP_DIR"
+  else
+    BACKUP_DIR="$BACKUP_ROOT/install-$stamp.DRYRUN"
+    run systemctl stop "${STOP_UNITS[@]}"
+    run install -d -m 0700 "$BACKUP_DIR"
+  fi
+  local target
+  for target in "${INSTALL_TARGETS[@]}"; do
     if [[ -e "$target" ]]; then run cp -a --parents "$target" "$BACKUP_DIR"; fi
   done
+  [[ "$DRY_RUN" == 1 ]] || FILES_MUTATED=1
   run install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/share/xanhtab/web /usr/lib/xanhtab/gstreamer-1.0 /etc/xanhtab /etc/systemd/system /usr/lib/tmpfiles.d /usr/lib/sysusers.d
   run install -m 0755 "$release/bin/xanhtabd" /usr/local/bin/xanhtabd
   run install -m 0755 "$release/libexec/xanhtab-browser" /usr/local/libexec/xanhtab-browser
   run install -m 0755 "$release/libexec/xanhtab-netd" /usr/local/libexec/xanhtab-netd
   run install -m 0755 "$release/libexec/xanhtab-blocklist" /usr/local/libexec/xanhtab-blocklist
+  run install -m 0755 "$release/libexec/xanhtab-x1-burn-audit" /usr/local/libexec/xanhtab-x1-burn-audit
   run cp -a "$release/web/." /usr/share/xanhtab/web/
   run cp -a "$release/plugins/gstreamer-1.0/." /usr/lib/xanhtab/gstreamer-1.0/
   run install -m 0644 "$release/systemd/xanhtabd.service" /etc/systemd/system/xanhtabd.service
@@ -295,9 +373,14 @@ install_release() {
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/xanhtab.toml ]]; then
     run install -m 0640 "$release/config/xanhtab.production.toml" /etc/xanhtab/xanhtab.toml
   fi
+  run chown root:xanhtab /etc/xanhtab/xanhtab.toml
+  if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/custom_hosts.txt ]]; then
+    run install -o root -g xanhtab -m 0640 "$release/config/custom_hosts.txt" /etc/xanhtab/custom_hosts.txt
+  fi
   if [[ -d "$WORK_DIR/public-config" ]]; then
     run install -d -o xanhtab -g xanhtab -m 0750 /var/lib/xanhtab/remote-config
     run cp -a "$WORK_DIR/public-config/." /var/lib/xanhtab/remote-config/
+    run chown -R xanhtab:xanhtab /var/lib/xanhtab/remote-config
     if [[ -f "$WORK_DIR/public-config/custom_hosts.txt" ]]; then
       run install -o root -g xanhtab -m 0640 "$WORK_DIR/public-config/custom_hosts.txt" /etc/xanhtab/custom_hosts.txt
     fi
@@ -312,6 +395,24 @@ install_release() {
     chmod 0644 /var/lib/xanhtab/blocklist.fst
     /usr/local/bin/xanhtabd --config /etc/xanhtab/xanhtab.toml --check-config
   fi
+}
+
+capture_service_state() {
+  local unit
+  PREVIOUS_ENABLED=()
+  PREVIOUS_ACTIVE=()
+  for unit in "${SERVICE_UNITS[@]}"; do
+    if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+      PREVIOUS_ENABLED+=(1)
+    else
+      PREVIOUS_ENABLED+=(0)
+    fi
+    if systemctl is-active --quiet "$unit" 2>/dev/null; then
+      PREVIOUS_ACTIVE+=(1)
+    else
+      PREVIOUS_ACTIVE+=(0)
+    fi
+  done
 }
 
 ensure_tls() {
@@ -329,15 +430,68 @@ ensure_tls() {
 }
 
 rollback_install() {
-  log "health check failed; rolling back installed files"
-  systemctl disable --now xanhtabd.service xanhtab-browser.service xanhtab-netd.service >/dev/null 2>&1 || true
-  for target in /usr/local/bin/xanhtabd /usr/local/libexec/xanhtab-browser /usr/local/libexec/xanhtab-netd /usr/local/libexec/xanhtab-blocklist /usr/share/xanhtab /usr/lib/xanhtab /etc/xanhtab /etc/systemd/system/xanhtabd.service /etc/systemd/system/xanhtab-browser.service /etc/systemd/system/xanhtab-netd.service /usr/lib/tmpfiles.d/xanhtab.conf /usr/lib/sysusers.d/xanhtab.conf; do
-    if [[ -d "$target" ]]; then rm -rf -- "$target"; elif [[ -e "$target" ]]; then rm -f -- "$target"; fi
+  [[ "$ROLLBACK_ACTIVE" == 0 ]] || return 0
+  ROLLBACK_ACTIVE=1
+  set +e
+  local rollback_failed=0
+  log "installation did not commit; restoring XanhTab files and service state"
+  local unit
+  for unit in "${STOP_UNITS[@]}"; do
+    if systemctl is-active --quiet "$unit" 2>/dev/null; then
+      systemctl stop "$unit" >/dev/null 2>&1 || rollback_failed=1
+    fi
   done
-  if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
-    cp -a "$BACKUP_DIR/." /
+  for unit in "${SERVICE_UNITS[@]}"; do
+    if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+      systemctl disable "$unit" >/dev/null 2>&1 || rollback_failed=1
+    fi
+  done
+  local runtime_path
+  for runtime_path in /run/xanhtab-session /run/xanhtab; do
+    if [[ -d "$runtime_path" && ! -L "$runtime_path" ]]; then
+      find "$runtime_path" -mindepth 1 -delete || rollback_failed=1
+    elif [[ -L "$runtime_path" ]]; then
+      rm -f -- "$runtime_path" || rollback_failed=1
+    fi
+  done
+  if [[ "$FILES_MUTATED" == 1 ]]; then
+    local target
+    for target in "${INSTALL_TARGETS[@]}"; do
+      if [[ -d "$target" ]]; then
+        rm -rf -- "$target" || rollback_failed=1
+      elif [[ -e "$target" || -L "$target" ]]; then
+        rm -f -- "$target" || rollback_failed=1
+      fi
+    done
+    if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+      cp -a "$BACKUP_DIR/." / || rollback_failed=1
+    fi
   fi
-  systemctl daemon-reload
+  systemctl daemon-reload || rollback_failed=1
+
+  local index
+  for index in "${!SERVICE_UNITS[@]}"; do
+    unit="${SERVICE_UNITS[$index]}"
+    if [[ "${PREVIOUS_ENABLED[$index]:-0}" == 1 ]]; then
+      systemctl enable "$unit" >/dev/null 2>&1 || rollback_failed=1
+    elif systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+      systemctl disable "$unit" >/dev/null 2>&1 || rollback_failed=1
+    fi
+    if [[ "${PREVIOUS_ACTIVE[$index]:-0}" == 1 ]]; then
+      systemctl start "$unit" >/dev/null 2>&1 || rollback_failed=1
+    elif systemctl is-active --quiet "$unit" 2>/dev/null; then
+      systemctl stop "$unit" >/dev/null 2>&1 || rollback_failed=1
+    fi
+  done
+  if [[ "$rollback_failed" == 1 ]]; then
+    log "ERROR: rollback was incomplete; inspect $BACKUP_DIR and service state before retrying"
+  else
+    log "rollback complete; backup retained at $BACKUP_DIR"
+    MUTATION_STARTED=0
+  fi
+  ROLLBACK_ACTIVE=0
+  set -e
+  return "$rollback_failed"
 }
 
 activate_and_healthcheck() {
@@ -357,8 +511,7 @@ activate_and_healthcheck() {
     sleep 1
   done
   systemctl --no-pager --full status xanhtabd.service xanhtab-browser.service xanhtab-netd.service >&2 || true
-  rollback_install
-  die "health check failed; previous files were restored and backup retained under $BACKUP_ROOT"
+  die "health check failed; transaction will be rolled back and its backup retained under $BACKUP_ROOT"
 }
 
 validate_arguments
@@ -375,4 +528,5 @@ validate_runtime_abi
 [[ "$DRY_RUN" == 1 ]] || sync_public_config
 install_release
 activate_and_healthcheck
+INSTALL_COMMITTED=1
 log "installation complete"

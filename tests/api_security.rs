@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use xanhtab::{
     AppState, api,
-    auth::AuthManager,
+    auth::{AuthManager, TicketPurpose},
     blocklist::Blocklist,
     browser::{BrowserBackend, MockBrowser},
     config::Config,
@@ -190,6 +190,24 @@ async fn burn_clears_runtime_and_revokes_cookie() {
         .unwrap();
     let payload = body_json(started).await;
     let id = payload["id"].as_str().unwrap();
+    let ticket_response = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/webrtc/ticket")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(r#"{"purpose":"signaling"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ticket_response.status(), StatusCode::OK);
+    let ticket = body_json(ticket_response).await["ticket"]
+        .as_str()
+        .unwrap()
+        .to_string();
     std::fs::create_dir_all(&harness.state.config.session.runtime_dir).unwrap();
     std::fs::write(
         harness.state.config.session.runtime_dir.join("cookie.db"),
@@ -229,6 +247,13 @@ async fn burn_clears_runtime_and_revokes_cookie() {
         .await
         .unwrap();
     assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        harness
+            .state
+            .auth
+            .consume_ticket(&ticket, TicketPurpose::Signaling)
+            .is_err()
+    );
 }
 
 #[tokio::test]

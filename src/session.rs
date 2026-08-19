@@ -403,10 +403,25 @@ fn push_history(history: &mut VecDeque<HistoryEntry>, url: Url) {
 }
 
 fn clear_runtime_dir(path: &Path) -> anyhow::Result<()> {
-    if path == Path::new("/") || path.components().count() < 2 {
+    if !path.is_absolute()
+        || path == Path::new("/")
+        || path.components().count() < 3
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
         anyhow::bail!("refusing to clear unsafe runtime path {}", path.display());
     }
     fs::create_dir_all(path)?;
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        anyhow::bail!(
+            "refusing to clear symlinked runtime path {}",
+            path.display()
+        );
+    }
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
@@ -426,6 +441,21 @@ mod tests {
     use crate::{browser::MockBrowser, netd::MockEgress};
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_cleanup_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("keep"), "sensitive").unwrap();
+        let linked_runtime = parent.path().join("session");
+        symlink(target.path(), &linked_runtime).unwrap();
+
+        assert!(clear_runtime_dir(&linked_runtime).is_err());
+        assert!(target.path().join("keep").exists());
+    }
 
     #[tokio::test]
     async fn lifecycle_enforces_lease_and_clears_runtime() {

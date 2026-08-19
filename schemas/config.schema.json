@@ -2,23 +2,77 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fireball.example/schemas/xanhtab-config-v1.json",
   "title": "XanhTab configuration v1",
+  "$comment": "This schema validates structure and local constraints. xanhtabd additionally enforces that allowed_origins contains the normalized public_base_url origin and that SocketAddr values parse.",
   "type": "object",
   "additionalProperties": false,
   "required": ["server", "session", "browser", "signaling", "network", "blocklist"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "server": {
+            "properties": { "allow_insecure_http": { "const": false } },
+            "required": ["allow_insecure_http"]
+          }
+        },
+        "required": ["server"]
+      },
+      "then": {
+        "properties": {
+          "server": {
+            "required": ["tls_cert", "tls_key"],
+            "properties": {
+              "public_base_url": { "pattern": "^https://[^/?#@]+/?$" },
+              "tls_cert": { "type": "string", "pattern": "^/" },
+              "tls_key": { "type": "string", "pattern": "^/" },
+              "secure_cookies": { "const": true },
+              "static_dir": { "pattern": "^/" },
+              "allowed_origins": {
+                "items": { "type": "string", "pattern": "^https://[^/?#@]+/?$" }
+              }
+            }
+          },
+          "browser": {
+            "properties": {
+              "enabled": { "const": true },
+              "command": { "pattern": "^/" },
+              "socket": { "pattern": "^/run/" }
+            }
+          },
+          "signaling": { "properties": { "enabled": { "const": true } } },
+          "network": {
+            "properties": {
+              "enabled": { "const": true },
+              "netd_socket": { "pattern": "^/run/" }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "server": {
       "type": "object",
       "additionalProperties": false,
       "required": ["listen", "public_base_url", "static_dir", "secure_cookies", "allow_insecure_http", "allowed_origins"],
       "properties": {
-        "listen": { "type": "string", "pattern": "^.+:[0-9]+$" },
-        "public_base_url": { "type": "string", "format": "uri" },
+        "listen": { "type": "string", "pattern": "^((([0-9]{1,3}\\.){3}[0-9]{1,3})|\\[[0-9A-Fa-f:]+\\]):[0-9]+$" },
+        "public_base_url": { "type": "string", "format": "uri", "pattern": "^https?://[^/?#@]+/?$" },
         "static_dir": { "type": "string", "minLength": 1 },
-        "tls_cert": { "type": ["string", "null"] },
-        "tls_key": { "type": ["string", "null"] },
+        "tls_cert": { "type": ["string", "null"], "pattern": "^/" },
+        "tls_key": { "type": ["string", "null"], "pattern": "^/" },
         "secure_cookies": { "type": "boolean" },
         "allow_insecure_http": { "type": "boolean" },
-        "allowed_origins": { "type": "array", "items": { "type": "string", "format": "uri" }, "minItems": 1 }
+        "allowed_origins": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri", "pattern": "^https?://[^/?#@]+/?$" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "dependentRequired": {
+        "tls_cert": ["tls_key"],
+        "tls_key": ["tls_cert"]
       }
     },
     "session": {
