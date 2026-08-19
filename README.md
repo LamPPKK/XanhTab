@@ -15,6 +15,21 @@ The repository contains the executable X0–X2 vertical slice, but **Gate X0 is 
 
 The three Fireball repositories may contain buildable F0 foundations, but their full product tracks remain gated until X3.
 
+## Control surface preview
+
+The production web client uses a local-only dark operations console. It includes the native video viewport, browser navigation, one-controller lease state, stream ladder, Direct/Tor/WARP/WireGuard/Proxy selection, auto-burn policy, blocklist state, RAM history, current device metrics, one-time pairing, and an explicit Burn Session confirmation.
+
+![XanhTab responsive control surface](docs/assets/xanhtab-control-surface.png)
+
+<p align="center">
+  <img src="docs/assets/xanhtab-pairing-mobile.png" width="36%" alt="XanhTab one-time pairing on a mobile controller">
+  <img src="docs/assets/xanhtab-burn-confirmation.png" width="60%" alt="XanhTab irreversible Burn Session confirmation">
+</p>
+
+The control-plane image is a static development render and deliberately reports `OFFLINE` with metrics at `WAITING`. Dialog previews use a local `ui-demo` fixture only to show authenticated state; they are not device benchmarks. No live-device value is fabricated. In production, telemetry is marked `LIVE` only while the client is receiving a fresh sample; timed-out, stale and unauthenticated states are labeled explicitly.
+
+[View the packaged `xanhtab://home` preview](docs/assets/xanhtab-internal-home.png).
+
 ## Components
 
 - `xanhtabd`: Rust/Axum TLS control plane and static web client, unprivileged.

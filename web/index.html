@@ -4,76 +4,149 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#090d0b">
-    <title>XanhTab — Remote isolation system</title>
+    <meta name="theme-color" content="#000000">
+    <meta name="description" content="XanhTab là thiết bị duyệt web cô lập, điều khiển từ xa qua mạng riêng.">
+    <title>XanhTab — Secure remote browser</title>
     <link rel="stylesheet" href="/styles.css">
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#workspace">Bỏ qua đến trình duyệt</a>
+    <a class="skip-link" href="#workspace">Đi thẳng đến trình duyệt</a>
+
+    <div class="ambient-grid" aria-hidden="true"></div>
     <div class="app-shell">
       <header class="masthead">
-        <div class="brand" aria-label="XanhTab">
-          <span class="brand-mark" aria-hidden="true">XT</span>
-          <div>
-            <strong>XANHTAB</strong>
-            <span>REMOTE ISOLATION SYSTEM / V1</span>
-          </div>
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M9 8h23l7 7v25H9z"></path>
+            <path d="M15 15h14M15 21h18M15 27h12"></path>
+            <circle cx="33" cy="33" r="5"></circle>
+          </svg>
+          <span class="brand-copy">
+            <strong>XanhTab</strong>
+            <small>Remote isolation appliance</small>
+          </span>
         </div>
-        <div class="mast-status">
+
+        <div class="mast-center" aria-hidden="true">
+          <span>ONE VIEW</span><i></i><span>ONE LEASE</span><i></i><span>RAM SESSION</span>
+        </div>
+
+        <div class="mast-status" role="status" aria-label="Trạng thái hệ thống">
           <span class="pulse" id="service-pulse" aria-hidden="true"></span>
-          <span id="service-state">ĐANG KIỂM TRA</span>
-          <span class="divider">/</span>
-          <span id="session-phase">IDLE</span>
+          <span class="status-copy">
+            <strong id="service-state">ĐANG KIỂM TRA</strong>
+            <small id="session-phase">IDLE</small>
+          </span>
         </div>
       </header>
 
       <main id="workspace" class="workspace">
         <section class="browser-module" aria-labelledby="browser-title">
-          <h1 id="browser-title" class="visually-hidden">Phiên duyệt web cô lập</h1>
-          <div class="browser-toolbar">
-            <div class="nav-cluster" aria-label="Điều hướng">
-              <button type="button" data-nav="back" title="Quay lại">BACK</button>
-              <button type="button" data-nav="forward" title="Tiến tới">NEXT</button>
-              <button type="button" data-nav="reload" title="Tải lại">RELOAD</button>
+          <div class="module-heading">
+            <div>
+              <p class="section-index">01 / ISOLATED VIEW</p>
+              <h1 id="browser-title">Phiên duyệt web từ xa</h1>
             </div>
-            <form id="omnibox-form" class="omnibox-form">
-              <label class="visually-hidden" for="omnibox">Địa chỉ hoặc từ khóa</label>
-              <span class="protocol-lock" aria-hidden="true">//</span>
-              <input id="omnibox" name="url" autocomplete="off" spellcheck="false" placeholder="Nhập địa chỉ hoặc từ khóa">
-              <button type="submit">GO</button>
-            </form>
-            <button type="button" id="burn-button" class="burn-button">BURN SESSION</button>
-          </div>
-
-          <div class="viewport-frame">
-            <video id="remote-video" autoplay playsinline aria-label="Luồng hình ảnh từ browser cô lập"></video>
-            <div id="viewport-empty" class="viewport-empty">
-              <div class="reticle" aria-hidden="true"><span></span></div>
-              <p class="eyebrow">ISOLATED VIEWPORT</p>
-              <h2 id="viewport-title">Chưa có phiên hoạt động</h2>
-              <p id="viewport-copy">Khởi tạo một WebView duy nhất. Cookie, cache, history và token sẽ nằm trong tmpfs.</p>
-              <button type="button" id="start-button" class="primary-action">START PRIVATE SESSION</button>
-            </div>
-            <div class="viewport-readout" aria-hidden="true">
-              <span id="profile-readout">1080P / 30</span>
-              <span id="stream-readout">NO SIGNAL</span>
+            <div class="trust-label">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.8 3.1 8 7.5 9.5 4.4-1.5 7.5-4.7 7.5-9.5V6z"></path><path d="m9 12 2 2 4-4"></path></svg>
+              <span>PRIVATE NETWORK<br><strong>CONTROLLED</strong></span>
             </div>
           </div>
 
-          <div class="session-strip">
-            <div><span>SESSION</span><strong id="session-id">—</strong></div>
-            <div><span>EGRESS</span><strong id="egress-readout">DIRECT</strong></div>
-            <div><span>AUTO-BURN</span><strong id="autoburn-readout">30:00</strong></div>
-            <div><span>CONTROL</span><strong id="control-readout">DETACHED</strong></div>
+          <div class="browser-chassis">
+            <div class="browser-toolbar">
+              <div class="nav-cluster" role="group" aria-label="Điều hướng">
+                <button type="button" data-nav="back" aria-label="Quay lại" title="Quay lại">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6"></path></svg>
+                </button>
+                <button type="button" data-nav="forward" aria-label="Tiến tới" title="Tiến tới">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"></path></svg>
+                </button>
+                <button type="button" data-nav="reload" aria-label="Tải lại" title="Tải lại">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8V4l-2 2a8 8 0 1 0 2.2 8"></path><path d="M19 4h-4"></path></svg>
+                </button>
+              </div>
+
+              <form id="omnibox-form" class="omnibox-form">
+                <label for="omnibox">Địa chỉ</label>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+                <input id="omnibox" name="url" autocomplete="off" spellcheck="false" inputmode="url" placeholder="Nhập URL hoặc từ khóa tìm kiếm">
+                <button type="submit" aria-label="Mở địa chỉ">
+                  <span>MỞ</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 7l5 5-5 5"></path></svg>
+                </button>
+              </form>
+
+              <button type="button" id="burn-button" class="burn-button" aria-label="Burn session">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c2 3 5 5.2 5 9a5 5 0 0 1-10 0c0-2.2 1.1-4.4 3.2-6.5.1 2 .8 3.2 1.8 4.2C13.4 8 13.4 5.7 12 3Z"></path></svg>
+                <span>BURN</span>
+              </button>
+            </div>
+
+            <div class="viewport-frame">
+              <video id="remote-video" autoplay playsinline aria-label="Luồng hình ảnh từ browser cô lập"></video>
+              <div id="viewport-empty" class="viewport-empty">
+                <div class="empty-copy">
+                  <p class="eyebrow"><span></span> <span id="viewport-kicker">CHECKING CONTROL PLANE</span></p>
+                  <h2 id="viewport-title">Một cửa sổ.<br>Không dấu vết.</h2>
+                  <p id="viewport-copy">Khởi tạo một WebView cô lập. Cookie, cache, lịch sử và token của phiên chỉ tồn tại trong RAM.</p>
+                  <button type="button" id="start-button" class="primary-action">
+                    <span>Khởi tạo phiên riêng tư</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 7l5 5-5 5"></path></svg>
+                  </button>
+                </div>
+
+                <div class="scope-visual" aria-hidden="true">
+                  <div class="scope-ring ring-a"></div>
+                  <div class="scope-ring ring-b"></div>
+                  <div class="scope-ring ring-c"></div>
+                  <div class="scope-axis axis-x"></div>
+                  <div class="scope-axis axis-y"></div>
+                  <div class="scope-core"><span>XT</span><small>ISOLATED</small></div>
+                  <span class="scope-node node-a"></span>
+                  <span class="scope-node node-b"></span>
+                  <span class="scope-node node-c"></span>
+                </div>
+              </div>
+
+              <div class="viewport-hud hud-top" aria-hidden="true">
+                <span>WPE / REMOTE SURFACE</span>
+                <span>CH.01</span>
+              </div>
+              <div class="viewport-hud hud-bottom" aria-hidden="true">
+                <span id="profile-readout">1080P / 30</span>
+                <span class="signal-mark"><i></i><i></i><i></i></span>
+                <span id="stream-readout">NO SIGNAL</span>
+              </div>
+            </div>
+
+            <div class="session-strip" role="group" aria-label="Thông tin phiên">
+              <div class="session-primary">
+                <span>SESSION ID</span>
+                <strong id="session-id">—</strong>
+              </div>
+              <div><span>EGRESS</span><strong id="egress-readout">DIRECT</strong></div>
+              <div><span>AUTO-BURN</span><strong id="autoburn-readout">30:00</strong></div>
+              <div><span>CONTROL LEASE</span><strong id="control-readout">DETACHED</strong></div>
+            </div>
           </div>
         </section>
 
         <aside class="instrument-panel" aria-label="Bảng điều khiển phần cứng và mạng">
-          <section class="panel-block">
-            <div class="panel-heading"><h2>HARDWARE</h2><span>LIVE</span></div>
+          <div class="panel-intro">
+            <p class="section-index">02 / CONTROL DECK</p>
+            <h2>Thiết bị</h2>
+            <p>Thông số trực tiếp của Pi và chính sách chỉ áp dụng cho phiên hiện tại.</p>
+          </div>
+
+          <section class="panel-block metrics-block">
+            <div class="panel-heading">
+              <h3>SỨC KHỎE HỆ THỐNG</h3>
+              <span class="live-label" data-state="idle"><i></i><span id="metrics-status">WAITING</span></span>
+            </div>
             <div class="metric-grid">
-              <div class="metric"><span>MEM AVAILABLE</span><strong id="metric-memory">—</strong><small>MiB</small></div>
+              <div class="metric metric-wide"><span>MEM AVAILABLE</span><strong id="metric-memory">—</strong><small>MiB</small><i class="metric-line"></i></div>
               <div class="metric"><span>THERMAL</span><strong id="metric-temp">—</strong><small>°C</small></div>
               <div class="metric"><span>BITRATE</span><strong id="metric-bitrate">—</strong><small>kbps</small></div>
               <div class="metric"><span>PACKET LOSS</span><strong id="metric-loss">—</strong><small>%</small></div>
@@ -81,59 +154,97 @@
           </section>
 
           <section class="panel-block">
-            <div class="panel-heading"><h2>STREAM PROFILE</h2><span>FIXED LADDER</span></div>
-            <div class="segmented" id="profile-controls">
-              <button type="button" data-profile="1080p30">1080P30 <small>PRIMARY</small></button>
-              <button type="button" data-profile="720p15">720P15 <small>RELEASE FLOOR</small></button>
-              <button type="button" data-profile="480p10">480P10 <small>EMERGENCY</small></button>
+            <div class="panel-heading"><h3>STREAM PROFILE</h3><span>FIXED LADDER</span></div>
+            <div class="profile-options" id="profile-controls">
+              <button type="button" data-profile="1080p30"><span><strong>1080</strong>P</span><small>30 FPS<br>PRIMARY</small></button>
+              <button type="button" data-profile="720p15"><span><strong>720</strong>P</span><small>15 FPS<br>FLOOR</small></button>
+              <button type="button" data-profile="480p10"><span><strong>480</strong>P</span><small>10 FPS<br>RESCUE</small></button>
             </div>
           </section>
 
           <section class="panel-block">
-            <div class="panel-heading"><h2>EGRESS ADAPTER</h2><span id="egress-state">READY</span></div>
+            <div class="panel-heading"><h3>EGRESS ADAPTER</h3><span id="egress-state">READY</span></div>
             <div class="egress-grid" id="egress-controls">
-              <button type="button" data-egress="direct">DIRECT</button>
-              <button type="button" data-egress="tor">TOR</button>
-              <button type="button" data-egress="warp">WARP</button>
-              <button type="button" data-egress="wireguard">WIREGUARD</button>
-              <button type="button" data-egress="proxy">PROXY</button>
+              <button type="button" data-egress="direct"><i>D</i><span>Direct</span></button>
+              <button type="button" data-egress="tor"><i>T</i><span>Tor</span></button>
+              <button type="button" data-egress="warp"><i>W</i><span>WARP</span></button>
+              <button type="button" data-egress="wireguard"><i>WG</i><span>WireGuard</span></button>
+              <button type="button" data-egress="proxy"><i>P</i><span>Proxy</span></button>
             </div>
-            <p class="panel-note">Đổi adapter sẽ dừng browser, reset policy, xóa runtime và mở lại phiên.</p>
+            <p class="panel-note">Thay adapter sẽ burn runtime hiện tại trước khi khởi động lại browser.</p>
           </section>
 
           <section class="panel-block">
-            <div class="panel-heading"><h2>SESSION POLICY</h2><span>RAM ONLY</span></div>
-            <div class="segmented" id="autoburn-controls">
-              <button type="button" data-autoburn="300">AUTO-BURN 5M <small>STRICT</small></button>
-              <button type="button" data-autoburn="1800">AUTO-BURN 30M <small>DEFAULT</small></button>
-              <button type="button" data-autoburn="0">AUTO-BURN OFF <small>THIS SESSION</small></button>
-              <button type="button" id="blocklist-toggle">BLOCKLIST ON <small>SESSION POLICY</small></button>
+            <div class="panel-heading"><h3>SESSION POLICY</h3><span>RAM ONLY</span></div>
+            <div class="policy-grid" id="autoburn-controls">
+              <button type="button" data-autoburn="300"><span>05</span><small>PHÚT<br>STRICT</small></button>
+              <button type="button" data-autoburn="1800"><span>30</span><small>PHÚT<br>DEFAULT</small></button>
+              <button type="button" data-autoburn="0"><span>∞</span><small>OFF<br>THIS SESSION</small></button>
             </div>
-            <p class="panel-note">Tắt blocklist hoặc auto-burn chỉ thay đổi phiên hiện tại; burn sẽ khôi phục mặc định.</p>
+            <button type="button" id="blocklist-toggle" class="blocklist-toggle">
+              <span class="toggle-track"><i></i></span>
+              <span><strong id="blocklist-label">BLOCKLIST ON</strong><small>SESSION POLICY</small></span>
+            </button>
           </section>
 
           <section class="panel-block history-block">
-            <div class="panel-heading"><h2>RAM HISTORY</h2><span id="blocked-count">0 BLOCKED</span></div>
+            <div class="panel-heading"><h3>RAM HISTORY</h3><span id="blocked-count">0 BLOCKED</span></div>
             <ol id="history-list" class="history-list"><li>Không có lịch sử phiên</li></ol>
           </section>
         </aside>
       </main>
 
       <footer class="system-footer">
-        <span>ONE VIEW / ONE CONTROLLER / ZERO ACCOUNT</span>
-        <span id="toast" role="status" aria-live="polite">SYSTEM READY</span>
+        <span><i></i> LOCAL CONTROL SURFACE</span>
+        <span id="toast" role="status" aria-live="polite" data-tone="neutral">SYSTEM READY</span>
+        <span>FIREBALL / XANHTAB V1</span>
       </footer>
     </div>
 
-    <dialog id="pairing-dialog" class="pairing-dialog">
+    <dialog id="pairing-dialog" class="pairing-dialog" aria-labelledby="pairing-title" aria-describedby="pairing-copy">
+      <div class="pairing-aside" aria-hidden="true">
+        <span class="pairing-number">01</span>
+        <div class="pairing-glyph">
+          <svg viewBox="0 0 64 64"><path d="M13 14h28l10 10v27H13z"></path><path d="M21 24h21M21 32h15"></path><circle cx="41" cy="42" r="6"></circle></svg>
+        </div>
+        <p>LOCAL<br>TRUST<br>EXCHANGE</p>
+      </div>
       <form id="pairing-form" method="dialog">
-        <p class="eyebrow">ZERO-ACCOUNT PAIRING</p>
-        <h2>Kết nối thiết bị điều khiển</h2>
-        <p>Quét QR do thiết bị in sau health check, hoặc nhập manual code 256-bit.</p>
+        <div class="dialog-lock" aria-hidden="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+        </div>
+        <p class="eyebrow"><span></span> ZERO-ACCOUNT PAIRING</p>
+        <h2 id="pairing-title">Kết nối<br>thiết bị này.</h2>
+        <p id="pairing-copy" class="pairing-copy">Quét QR được thiết bị hiển thị sau health check, hoặc nhập manual code có đầy đủ 256-bit entropy.</p>
         <label for="pairing-secret">PAIRING SECRET / MANUAL CODE</label>
-        <input id="pairing-secret" name="secret" required minlength="40" maxlength="128" autocomplete="one-time-code">
+        <input id="pairing-secret" name="secret" required minlength="40" maxlength="128" autocomplete="one-time-code" aria-describedby="pairing-helper pairing-error" placeholder="XXXX-XXXX-XXXX-XXXX-…">
+        <p id="pairing-helper" class="field-helper">Dấu cách giữa các nhóm Base32 sẽ tự đổi thành dấu gạch nối.</p>
         <p id="pairing-error" class="form-error" role="alert"></p>
-        <button type="submit" class="primary-action">PAIR THIS DEVICE</button>
+        <button type="submit" id="pairing-submit" class="primary-action pairing-submit">
+          <span>Xác minh &amp; giữ control lease</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M14 7l5 5-5 5"></path></svg>
+        </button>
+        <p class="pairing-footnote">Secret chỉ dùng một lần · Không tài khoản · Không telemetry</p>
+      </form>
+    </dialog>
+
+    <dialog id="burn-dialog" class="burn-dialog" aria-labelledby="burn-title" aria-describedby="burn-copy">
+      <form id="burn-form" method="dialog">
+        <div class="danger-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3c2 3 5 5.2 5 9a5 5 0 0 1-10 0c0-2.2 1.1-4.4 3.2-6.5.1 2 .8 3.2 1.8 4.2C13.4 8 13.4 5.7 12 3Z"></path></svg>
+        </div>
+        <p class="danger-kicker">IRREVERSIBLE SESSION ACTION</p>
+        <h2 id="burn-title">Burn phiên này?</h2>
+        <p id="burn-copy">Browser tree sẽ dừng, control lease và token bị thu hồi, rồi toàn bộ runtime trong RAM được xóa.</p>
+        <p id="burn-error" class="form-error" role="alert"></p>
+        <dl class="burn-summary">
+          <div><dt>SESSION</dt><dd id="burn-session-id">—</dd></div>
+          <div><dt>RESULT</dt><dd>NEW PAIRING REQUIRED</dd></div>
+        </dl>
+        <div class="dialog-actions">
+          <button type="submit" id="burn-cancel" value="cancel">Giữ phiên hiện tại</button>
+          <button type="button" id="burn-confirm" class="danger-action">Burn &amp; revoke</button>
+        </div>
       </form>
     </dialog>
   </body>

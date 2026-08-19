@@ -3,24 +3,234 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#000000">
     <title>XanhTab Home</title>
     <style>
-      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background: #080c09; color: #e8efe9; }
-      body { min-height: 100vh; margin: 0; display: grid; place-items: center; }
-      main { width: min(720px, calc(100% - 48px)); border: 1px solid #2a3a30; padding: 36px; background: #101713; }
-      small, code { color: #78f0a4; font-family: ui-monospace, monospace; letter-spacing: .08em; }
-      h1 { margin: 10px 0; font-size: clamp(32px, 7vw, 68px); letter-spacing: -.05em; }
-      p { max-width: 58ch; color: #8d9f92; line-height: 1.7; }
-      hr { margin: 28px 0; border: 0; border-top: 1px solid #2a3a30; }
+      :root {
+        --ink: #000000;
+        --ink-soft: #0c130e;
+        --bone: #e0e0e0;
+        --green: #00ff41;
+        --mint: #7dff9e;
+        --muted: #94a3b8;
+        --line: rgba(224, 224, 224, .13);
+        --display: "Fira Code", "Cascadia Code", "SFMono-Regular", monospace;
+        --body: "Fira Sans", "Avenir Next", "Trebuchet MS", sans-serif;
+        --mono: "Fira Code", "Cascadia Code", "SFMono-Regular", monospace;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        color: var(--bone);
+        background:
+          radial-gradient(circle at 85% 15%, rgba(0, 255, 65, .08), transparent 28rem),
+          linear-gradient(rgba(0, 255, 65, .035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(0, 255, 65, .035) 1px, transparent 1px),
+          var(--ink);
+        background-size: auto, 54px 54px, 54px 54px, auto;
+        font-family: var(--body);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        width: min(1180px, calc(100% - 48px));
+        margin: auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, .9);
+        box-shadow: 0 40px 100px rgba(0, 0, 0, .28);
+      }
+
+      .copy {
+        min-height: 570px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: clamp(36px, 7vw, 82px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        font: 800 16px var(--display);
+      }
+
+      .brand svg {
+        width: 36px;
+        height: 36px;
+        padding: 6px;
+        color: var(--ink);
+        background: var(--green);
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.7;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0;
+        color: var(--green);
+        font: 700 9px var(--mono);
+        letter-spacing: .15em;
+      }
+
+      .eyebrow::before { content: ""; width: 22px; height: 1px; background: currentColor; }
+      h1 { margin: 15px 0 20px; font: 680 clamp(48px, 7vw, 86px)/.88 var(--display); letter-spacing: -.055em; }
+      .lead { max-width: 560px; margin: 0; color: var(--muted); font-size: clamp(13px, 1.6vw, 16px); line-height: 1.65; }
+
+      .instruction {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        margin-top: 38px;
+        color: var(--bone);
+        font: 700 9px var(--mono);
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+
+      .instruction i {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        border: 1px solid var(--green);
+        color: var(--green);
+        font: normal 800 13px var(--mono);
+      }
+
+      .limits { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 0; list-style: none; }
+      .limits li { padding: 7px 9px; border: 1px solid var(--line); color: var(--muted); font: 700 8px var(--mono); letter-spacing: .1em; }
+
+      .visual {
+        position: relative;
+        min-height: 570px;
+        overflow: hidden;
+        border-left: 1px solid var(--line);
+        background: var(--ink-soft);
+      }
+
+      .visual-label {
+        position: absolute;
+        top: 22px;
+        left: 22px;
+        z-index: 2;
+        color: var(--mint);
+        font: 700 8px var(--mono);
+        letter-spacing: .13em;
+      }
+
+      .scope { position: absolute; width: 470px; height: 470px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+      .ring, .axis, .core, .node { position: absolute; }
+      .ring { border: 1px solid rgba(0, 255, 65, .23); border-radius: 50%; }
+      .ring.outer { inset: 1%; }
+      .ring.middle { inset: 18%; border-style: dashed; animation: orbit 26s linear infinite; }
+      .ring.inner { inset: 35%; border-color: var(--green); }
+      .axis.horizontal { top: 50%; left: 0; right: 0; height: 1px; background: rgba(0, 255, 65, .17); }
+      .axis.vertical { top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(0, 255, 65, .17); }
+
+      .core {
+        inset: 41%;
+        display: grid;
+        place-content: center;
+        border: 1px solid var(--green);
+        color: var(--green);
+        background: var(--ink);
+        font: 800 20px var(--display);
+        transform: rotate(45deg);
+      }
+
+      .core span { transform: rotate(-45deg); }
+      .node { width: 9px; height: 9px; border: 2px solid var(--green); border-radius: 50%; background: var(--ink-soft); box-shadow: 0 0 0 5px rgba(0, 255, 65, .08); }
+      .node.one { top: 11%; left: 27%; }
+      .node.two { top: 48%; right: 0; }
+      .node.three { bottom: 9%; left: 36%; }
+
+      .visual-footer {
+        position: absolute;
+        left: 22px;
+        right: 22px;
+        bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        color: var(--mint);
+        font: 700 8px var(--mono);
+        letter-spacing: .12em;
+      }
+
+      @keyframes orbit { to { transform: rotate(360deg); } }
+
+      @media (max-width: 760px) {
+        main { width: min(620px, calc(100% - 24px)); grid-template-columns: 1fr; }
+        .copy { min-height: 500px; }
+        .visual { min-height: 310px; border-top: 1px solid var(--line); border-left: 0; }
+        .scope { width: 350px; height: 350px; }
+      }
+
+      @media (max-width: 420px) {
+        main { width: calc(100% - 16px); }
+        .copy { min-height: 480px; padding: 28px 24px; }
+        h1 { font-size: 58px; }
+        .visual { min-height: 250px; }
+        .scope { width: 290px; height: 290px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+      }
     </style>
   </head>
   <body>
     <main>
-      <small>XANHTAB://HOME / ISOLATED CONTEXT</small>
-      <h1>Một view. Một phiên.</h1>
-      <p>Nhập địa chỉ trên thanh điều khiển bên ngoài luồng video. Dữ liệu duyệt nhạy cảm của phiên này nằm trong tmpfs và sẽ bị xóa khi Burn Session hoàn tất.</p>
-      <hr>
-      <code>DRM · DOWNLOAD · CLIPBOARD · MULTI-TAB: DISABLED</code>
+      <section class="copy">
+        <div class="brand">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M9 8h23l7 7v25H9z"></path><path d="M15 15h14M15 21h18M15 27h12"></path><circle cx="33" cy="33" r="5"></circle></svg>
+          <span>XanhTab</span>
+        </div>
+
+        <div>
+          <p class="eyebrow">XANHTAB://HOME</p>
+          <h1>Một view.<br>Một phiên.</h1>
+          <p class="lead">Nhập địa chỉ trên thanh điều khiển bên ngoài luồng video. Dữ liệu duyệt nhạy cảm của phiên này chỉ tồn tại trong tmpfs và được xóa khi Burn Session hoàn tất.</p>
+          <p class="instruction"><i>↑</i><span>Dùng omnibox phía trên để bắt đầu</span></p>
+        </div>
+
+        <ul class="limits" aria-label="Các tính năng bị tắt trong phiên này">
+          <li>DRM OFF</li>
+          <li>DOWNLOAD OFF</li>
+          <li>CLIPBOARD OFF</li>
+          <li>SINGLE TAB</li>
+        </ul>
+      </section>
+
+      <aside class="visual" aria-hidden="true">
+        <span class="visual-label">ISOLATED NAVIGATION CONTEXT / 01</span>
+        <div class="scope">
+          <span class="ring outer"></span>
+          <span class="ring middle"></span>
+          <span class="ring inner"></span>
+          <span class="axis horizontal"></span>
+          <span class="axis vertical"></span>
+          <span class="core"><span>XT</span></span>
+          <span class="node one"></span>
+          <span class="node two"></span>
+          <span class="node three"></span>
+        </div>
+        <div class="visual-footer"><span>RAM STORE</span><span>READY</span></div>
+      </aside>
     </main>
   </body>
 </html>
