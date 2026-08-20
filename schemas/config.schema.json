@@ -11,6 +11,7 @@
       "if": {
         "properties": {
           "server": {
+            "type": "object",
             "properties": { "allow_insecure_http": { "const": false } },
             "required": ["allow_insecure_http"]
           }
@@ -20,31 +21,39 @@
       "then": {
         "properties": {
           "server": {
+            "type": "object",
             "required": ["tls_cert", "tls_key"],
             "properties": {
-              "public_base_url": { "pattern": "^https://[^/?#@]+/?$" },
+              "public_base_url": { "type": "string", "pattern": "^https://[^/?#@]+/?$" },
               "tls_cert": { "type": "string", "pattern": "^/" },
               "tls_key": { "type": "string", "pattern": "^/" },
               "secure_cookies": { "const": true },
-              "static_dir": { "pattern": "^/" },
+              "static_dir": { "type": "string", "pattern": "^/" },
               "allowed_origins": {
+                "type": "array",
                 "items": { "type": "string", "pattern": "^https://[^/?#@]+/?$" }
               }
             }
           },
           "browser": {
+            "type": "object",
             "properties": {
               "enabled": { "const": true },
-              "command": { "pattern": "^/" },
-              "socket": { "pattern": "^/run/" }
+              "command": { "type": "string", "pattern": "^/" },
+              "socket": { "type": "string", "pattern": "^/run/" }
             }
           },
-          "signaling": { "properties": { "enabled": { "const": true } } },
+          "signaling": {
+            "type": "object",
+            "properties": { "enabled": { "const": true } }
+          },
           "network": {
+            "type": "object",
             "required": ["control_uid"],
             "properties": {
               "enabled": { "const": true },
-              "netd_socket": { "pattern": "^/run/" }
+              "control_uid": { "type": "integer", "minimum": 1 },
+              "netd_socket": { "type": "string", "pattern": "^/run/" }
             }
           }
         }

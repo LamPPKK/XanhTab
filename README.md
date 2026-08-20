@@ -91,6 +91,8 @@ The evaluator only returns GO when 720p15 has less than 2% frame drop, input lat
 
 `scripts/x0-preflight-json.sh` performs read-only discovery of the Pi model, kernel, firmware, total/free CMA, encoder/render devices, active and boot-file cgroup intent, selected installed/candidate package versions, GStreamer ABI and required elements. It does not refresh APT metadata, install packages or modify boot configuration.
 
+`npm ci && npm run test:schemas` compiles every JSON Schema as Draft 2020-12 and validates the real development/production TOML, published X0 evidence, the production release-manifest renderer and a passing X1 burn-audit fixture. Negative cases prove that unknown config/evidence fields, missing production TLS material, burn residue and malformed checksums are rejected.
+
 ## Verified installation
 
 Do not pipe a network response into `sudo`. Download the installer, detached signature, and trusted public key separately; verify before execution:

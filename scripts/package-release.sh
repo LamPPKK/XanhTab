@@ -49,15 +49,14 @@ mv "$checksum_file" "$STAGE/checksums.sha256"
 tar --zstd -cf "$DIST/$ARCHIVE" -C "$STAGE" .
 
 checksum="$(sha256sum "$DIST/$ARCHIVE" | awk '{print $1}')"
-jq -n \
-  --arg version "$VERSION" \
-  --arg name "$ARCHIVE" \
-  --arg url "${BASE_URL%/}/$ARCHIVE" \
-  --arg sha256 "$checksum" \
-  --arg wpe "$WPE_VERSION" \
-  --arg gstreamer "$GSTREAMER_VERSION" \
-  --arg rswebrtc "$RSWEBRTC_VERSION" \
-  '{schema_version: 1, version: $version, config_schema_version: 1, gstreamer_abi: "1.0", component_versions: {wpe_webkit: $wpe, gstreamer: $gstreamer, rswebrtc: $rswebrtc}, artifacts: [{platform: "linux-aarch64", name: $name, url: $url, sha256: $sha256}]}' \
+"$ROOT/scripts/render-release-manifest.sh" \
+  "$VERSION" \
+  "$ARCHIVE" \
+  "${BASE_URL%/}/$ARCHIVE" \
+  "$checksum" \
+  "$WPE_VERSION" \
+  "$GSTREAMER_VERSION" \
+  "$RSWEBRTC_VERSION" \
   > "$DIST/release-manifest.json"
 minisign -Sm "$DIST/release-manifest.json" -s "$MINISIGN_SECRET_KEY" -x "$DIST/release-manifest.json.minisig"
 install -m 0755 "$ROOT/install.sh" "$DIST/install.sh"

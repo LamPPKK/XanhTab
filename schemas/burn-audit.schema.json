@@ -13,16 +13,18 @@
       "then": {
         "properties": {
           "observations": {
+            "type": "object",
             "properties": {
               "burn_http_status": { "const": 200 },
               "stale_cookie_http_status": { "const": 401 },
               "runtime_entries": { "const": 0 },
               "runtime_sockets": { "const": 0 },
-              "browser_session_processes_before_burn": { "minimum": 1 },
+              "browser_session_processes_before_burn": { "type": "integer", "minimum": 1 },
               "browser_session_processes_after_burn": { "const": 0 }
             }
           },
           "checks": {
+            "type": "object",
             "properties": {
               "burn_completed": { "const": true },
               "phase_idle": { "const": true },

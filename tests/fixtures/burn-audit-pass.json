@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-20T00:00:00Z",
+  "base_origin": "https://xanhtab.local:8443",
+  "browser_service": "xanhtab-browser.service",
+  "burn_slo_ms": 5000,
+  "burn_duration_ms": 412,
+  "observations": {
+    "burn_http_status": 200,
+    "stale_cookie_http_status": 401,
+    "runtime_entries": 0,
+    "runtime_sockets": 0,
+    "browser_session_processes_before_burn": 3,
+    "browser_session_processes_after_burn": 0
+  },
+  "checks": {
+    "burn_completed": true,
+    "phase_idle": true,
+    "stale_cookie_rejected": true,
+    "runtime_empty": true,
+    "browser_process_tree_observed": true,
+    "browser_process_tree_stopped": true,
+    "pairing_rotated": true,
+    "burn_slo_met": true
+  },
+  "passed": true
+}
