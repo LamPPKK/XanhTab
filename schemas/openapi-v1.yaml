@@ -140,4 +140,4 @@ components:
     SessionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
-      description: Stable error code and redacted message. Dependency, encoder, signaling, and leak-test failures use DEPENDENCY_UNAVAILABLE, ENCODER_UNAVAILABLE, SIGNALING_UNAVAILABLE, and LEAK_TEST_FAILED.
+      description: Stable error code and redacted message. A top-level URL rejected by the active FST policy uses NAVIGATION_BLOCKED. Dependency, encoder, signaling, and leak-test failures use DEPENDENCY_UNAVAILABLE, ENCODER_UNAVAILABLE, SIGNALING_UNAVAILABLE, and LEAK_TEST_FAILED.

@@ -9,7 +9,7 @@ The repository contains the executable X0–X2 vertical slice, but **Gate X0 is 
 | Gate | Implemented here | Remaining go/no-go evidence |
 | --- | --- | --- |
 | X0 | WPE → conversion → V4L2 H.264 → `webrtcsink`, Opus branch, control DataChannel flag, 20-site/three-profile capture harness | Enable the cgroup v2 memory controller, supply `webrtcsink`, resolve the encoder failure, then complete the six-hour hardware run and latency/thermal/memory verdict |
-| X1 | Three services, pairing, cookie/CSRF, one controller, FSM, tmpfs cleanup, FST blocklist, RAM history, auto-burn, and a redacted device-side burn audit | Run the packaged audit on Pi and retain a passing process/socket/auth/SLO report |
+| X1 | Three services, pairing, cookie/CSRF, one controller, FSM, tmpfs cleanup, FST top-level navigation policy, RAM history, auto-burn, and a redacted device-side burn audit | Add engine-level subresource interception, then run the packaged audit on Pi and retain a passing process/socket/auth/SLO report |
 | X2 | Responsive clientless dashboard, navigation, session policy controls, profile ladder, version metrics, purpose-bound signaling relay, five adapter contracts, transactional nftables/process restart | End-to-end rswebrtc consumer handshake plus five-adapter IP/DNS/kill-switch hardware matrix |
 | X3 | Signed-manifest packaging with pinned ARM64 rswebrtc plugin, verified/idempotent installer structure, repair/uninstall and rollback | Signed first release, fresh-install/upgrade matrix and 24-hour fault soak |
 
@@ -37,6 +37,8 @@ The control-plane image is a static development render and deliberately reports 
 - `xanhtab-netd`: minimal privileged egress helper using validated enum commands and fixed argv execution.
 - `web/`: industrial, responsive dashboard. The media surface is a native `<video>` element; no frame-by-frame canvas path exists.
 - `schemas/`: config v1 JSON Schema and Control API v1 OpenAPI contract.
+
+When a session's FST policy is enabled, explicit HTTP(S) start and omnibox navigation requests are rejected before the browser helper is called, including subdomains of a listed host. Disabling the policy is lease-bound and applies only to that active session. This control-plane enforcement does not yet claim to intercept subresources or link navigation initiated inside WebKit; that engine-level hook remains required before the blocker is release-complete.
 
 See [protocol v1](docs/protocol-v1.md) for trust boundaries and lifecycle semantics.
 

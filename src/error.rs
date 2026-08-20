@@ -18,6 +18,8 @@ pub enum AppError {
     InvalidTransition,
     #[error("resource not found")]
     NotFound,
+    #[error("navigation blocked by the active session policy")]
+    NavigationBlocked,
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("service unavailable: {0}")]
@@ -55,6 +57,7 @@ impl AppError {
             Self::SessionNotActive => (StatusCode::CONFLICT, "SESSION_INACTIVE"),
             Self::InvalidTransition => (StatusCode::CONFLICT, "SESSION_TRANSITION_INVALID"),
             Self::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            Self::NavigationBlocked => (StatusCode::FORBIDDEN, "NAVIGATION_BLOCKED"),
             Self::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "REQUEST_INVALID"),
             Self::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE"),
             Self::DependencyFailure(_) => {
@@ -79,5 +82,18 @@ impl IntoResponse for AppError {
             }),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_block_has_a_stable_forbidden_contract() {
+        assert_eq!(
+            AppError::NavigationBlocked.status_and_code(),
+            (StatusCode::FORBIDDEN, "NAVIGATION_BLOCKED")
+        );
     }
 }

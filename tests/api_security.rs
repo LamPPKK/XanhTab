@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use xanhtab::{
     AppState, api,
     auth::{AuthManager, TicketPurpose},
-    blocklist::Blocklist,
+    blocklist::{Blocklist, compile_hosts},
     browser::{BrowserBackend, MockBrowser},
     config::Config,
     events::EventBus,
@@ -32,6 +32,14 @@ fn harness() -> Harness {
 }
 
 fn harness_with_auth_ttl(auth_ttl: Duration) -> Harness {
+    harness_with_auth_ttl_and_hosts(auth_ttl, None)
+}
+
+fn harness_with_blocked_hosts(hosts: &str) -> Harness {
+    harness_with_auth_ttl_and_hosts(Duration::from_secs(600), Some(hosts))
+}
+
+fn harness_with_auth_ttl_and_hosts(auth_ttl: Duration, hosts: Option<&str>) -> Harness {
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.server.static_dir = temp.path().join("web");
@@ -41,7 +49,16 @@ fn harness_with_auth_ttl(auth_ttl: Duration) -> Harness {
     let browser: Arc<dyn BrowserBackend> = Arc::new(MockBrowser::default());
     let egress: Arc<dyn EgressBackend> = Arc::new(MockEgress::default());
     let events = EventBus::new(32);
-    let sessions = SessionManager::new(
+    let blocklist = if let Some(hosts) = hosts {
+        let source = temp.path().join("hosts.txt");
+        let compiled = temp.path().join("blocklist.fst");
+        std::fs::write(&source, hosts).unwrap();
+        compile_hosts(&[source], &compiled).unwrap();
+        Blocklist::open(compiled).unwrap()
+    } else {
+        Blocklist::default()
+    };
+    let sessions = SessionManager::new_with_blocklist(
         events.clone(),
         browser.clone(),
         egress.clone(),
@@ -49,6 +66,7 @@ fn harness_with_auth_ttl(auth_ttl: Duration) -> Harness {
         config.network.initial_mode,
         config.session.initial_profile,
         config.session.auto_burn_seconds,
+        blocklist.clone(),
     );
     let auth = AuthManager::new(auth_ttl, Duration::from_secs(30));
     let pairing = auth.rotate_pairing().unwrap();
@@ -63,7 +81,7 @@ fn harness_with_auth_ttl(auth_ttl: Duration) -> Harness {
         config,
         auth,
         sessions,
-        metrics: MetricsCollector::new(Blocklist::default()),
+        metrics: MetricsCollector::new(blocklist),
         events,
         browser,
         egress,
@@ -411,4 +429,119 @@ async fn session_policy_endpoints_require_controller_and_csrf() {
         .await
         .unwrap();
     assert_eq!(without_csrf.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn blocklist_policy_rejects_navigation_and_preserves_session_state() {
+    let harness = harness_with_blocked_hosts("0.0.0.0 blocked.example\n");
+    let (cookie, csrf) = pair(&harness).await;
+
+    let blocked_start = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/session")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(r#"{"url":"https://blocked.example/"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked_start.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(blocked_start).await["error"]["code"],
+        "NAVIGATION_BLOCKED"
+    );
+    assert_eq!(
+        harness.state.sessions.snapshot().await.phase,
+        xanhtab::model::SessionPhase::Idle
+    );
+    assert!(harness.state.sessions.history().await.is_empty());
+
+    let started = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/session")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(r#"{"url":"https://example.com/"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let id = body_json(started).await["id"].as_str().unwrap().to_string();
+
+    let blocked_navigation = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/session/{id}/navigation"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(
+                    r#"{"navigate":{"url":"https://pixel.blocked.example/path"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked_navigation.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(blocked_navigation).await["error"]["code"],
+        "NAVIGATION_BLOCKED"
+    );
+    let unchanged = harness.state.sessions.snapshot().await;
+    assert_eq!(unchanged.url.unwrap().as_str(), "https://example.com/");
+    assert_eq!(harness.state.sessions.history().await.len(), 1);
+    assert_eq!(
+        harness
+            .state
+            .metrics
+            .sample(
+                unchanged.stream_profile,
+                unchanged.egress,
+                unchanged.blocklist_enabled,
+            )
+            .blocked_requests,
+        2
+    );
+
+    let disabled = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::put(format!("/api/v1/session/{id}/blocklist"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(r#"{"enabled":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+
+    let allowed_by_policy = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/session/{id}/navigation"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from(
+                    r#"{"navigate":{"url":"https://blocked.example/allowed"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed_by_policy.status(), StatusCode::OK);
+    assert_eq!(harness.state.sessions.history().await.len(), 2);
 }

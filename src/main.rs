@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let config = Arc::new(config);
 
     let blocklist = Blocklist::open(&config.blocklist.fst_path)?;
-    let metrics = MetricsCollector::new(blocklist);
+    let metrics = MetricsCollector::new(blocklist.clone());
     let events = EventBus::new(128);
     let browser: Arc<dyn BrowserBackend> = if config.browser.enabled {
         Arc::new(SocketBrowser::new(
@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         warn!("network helper is disabled; using deterministic mock backend");
         Arc::new(MockEgress::default())
     };
-    let sessions = SessionManager::new(
+    let sessions = SessionManager::new_with_blocklist(
         events.clone(),
         browser.clone(),
         egress.clone(),
@@ -112,6 +112,7 @@ async fn main() -> Result<()> {
         config.network.initial_mode,
         config.session.initial_profile,
         config.session.auto_burn_seconds,
+        blocklist,
     );
     let auth = AuthManager::new(config.auth_ttl(), config.ticket_ttl());
     let pairing = auth.rotate_pairing()?;

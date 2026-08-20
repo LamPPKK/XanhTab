@@ -13,6 +13,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    blocklist::Blocklist,
     browser::BrowserBackend,
     error::AppError,
     events::EventBus,
@@ -43,6 +44,7 @@ pub struct SessionManager {
     initial_egress: EgressMode,
     initial_profile: StreamProfile,
     initial_auto_burn_seconds: u64,
+    blocklist: Blocklist,
 }
 
 impl SessionManager {
@@ -54,6 +56,29 @@ impl SessionManager {
         initial_egress: EgressMode,
         initial_profile: StreamProfile,
         initial_auto_burn_seconds: u64,
+    ) -> Self {
+        Self::new_with_blocklist(
+            events,
+            browser,
+            egress,
+            runtime_dir,
+            initial_egress,
+            initial_profile,
+            initial_auto_burn_seconds,
+            Blocklist::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_blocklist(
+        events: EventBus,
+        browser: Arc<dyn BrowserBackend>,
+        egress: Arc<dyn EgressBackend>,
+        runtime_dir: std::path::PathBuf,
+        initial_egress: EgressMode,
+        initial_profile: StreamProfile,
+        initial_auto_burn_seconds: u64,
+        blocklist: Blocklist,
     ) -> Self {
         let snapshot = SessionSnapshot {
             egress: initial_egress,
@@ -75,6 +100,7 @@ impl SessionManager {
             initial_egress,
             initial_profile,
             initial_auto_burn_seconds,
+            blocklist,
         }
     }
 
@@ -95,6 +121,7 @@ impl SessionManager {
             ) {
                 return Err(AppError::InvalidTransition);
             }
+            self.ensure_navigation_allowed(&url, data.snapshot.blocklist_enabled)?;
             acquire_lease(&mut data, client_id)?;
             let id = Uuid::new_v4();
             data.snapshot.id = Some(id);
@@ -210,6 +237,9 @@ impl SessionManager {
             let mut data = self.inner.write().await;
             ensure_active_lease(&data, client_id)?;
             data.last_activity = Instant::now();
+            if let NavigationCommand::Navigate { url } = &command {
+                self.ensure_navigation_allowed(url, data.snapshot.blocklist_enabled)?;
+            }
         }
         self.browser.navigate(&command).await?;
         let mut data = self.inner.write().await;
@@ -382,6 +412,18 @@ impl SessionManager {
         self.events.publish("session.failed", snapshot);
         Err(AppError::ServiceUnavailable(message))
     }
+
+    fn ensure_navigation_allowed(&self, url: &Url, enabled: bool) -> Result<(), AppError> {
+        if enabled
+            && matches!(url.scheme(), "http" | "https")
+            && url
+                .host_str()
+                .is_some_and(|host| self.blocklist.contains(host))
+        {
+            return Err(AppError::NavigationBlocked);
+        }
+        Ok(())
+    }
 }
 
 fn acquire_lease(data: &mut SessionData, client_id: Uuid) -> Result<(), AppError> {
@@ -454,7 +496,11 @@ fn clear_runtime_dir(path: &Path) -> anyhow::Result<()> {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::{browser::MockBrowser, netd::MockEgress};
+    use crate::{
+        blocklist::{Blocklist, compile_hosts},
+        browser::MockBrowser,
+        netd::MockEgress,
+    };
 
     use super::*;
 
@@ -563,6 +609,69 @@ mod tests {
         let burned = manager.burn(owner).await.unwrap();
         assert!(burned.blocklist_enabled);
         assert_eq!(burned.auto_burn_seconds, 1_800);
+    }
+
+    #[tokio::test]
+    async fn blocklist_enforces_top_level_navigation_without_mutating_session_state() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("hosts.txt");
+        let compiled = root.path().join("blocklist.fst");
+        fs::write(&source, "0.0.0.0 blocked.example\n").unwrap();
+        compile_hosts(&[source], &compiled).unwrap();
+        let blocklist = Blocklist::open(&compiled).unwrap();
+        let browser = Arc::new(MockBrowser::default());
+        let manager = SessionManager::new_with_blocklist(
+            EventBus::new(16),
+            browser.clone(),
+            Arc::new(MockEgress::default()),
+            root.path().join("session"),
+            EgressMode::Direct,
+            StreamProfile::Hd15,
+            1_800,
+            blocklist.clone(),
+        );
+        let owner = Uuid::new_v4();
+
+        assert!(matches!(
+            manager
+                .start(owner, Url::parse("https://blocked.example/").unwrap())
+                .await,
+            Err(AppError::NavigationBlocked)
+        ));
+        assert_eq!(manager.snapshot().await.phase, SessionPhase::Idle);
+        assert!(browser.calls().await.is_empty());
+
+        let allowed = Url::parse("https://example.com/").unwrap();
+        manager.start(owner, allowed.clone()).await.unwrap();
+        assert!(matches!(
+            manager
+                .navigate(
+                    owner,
+                    NavigationCommand::Navigate {
+                        url: Url::parse("https://pixel.blocked.example/path").unwrap(),
+                    },
+                )
+                .await,
+            Err(AppError::NavigationBlocked)
+        ));
+        assert_eq!(manager.snapshot().await.url, Some(allowed));
+        assert_eq!(manager.history().await.len(), 1);
+        assert_eq!(browser.calls().await.len(), 1);
+        assert_eq!(blocklist.hits(), 2);
+
+        manager.set_blocklist_enabled(owner, false).await.unwrap();
+        manager
+            .navigate(
+                owner,
+                NavigationCommand::Navigate {
+                    url: Url::parse("https://blocked.example/allowed-by-policy").unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(manager.history().await.len(), 2);
+        assert_eq!(browser.calls().await.len(), 2);
+        assert_eq!(blocklist.hits(), 2);
     }
 
     #[derive(Default)]
