@@ -109,11 +109,27 @@ impl SessionManager {
         self.publish("session.starting").await;
 
         if let Err(error) = self.egress.apply(egress).await {
-            return self.fail(error.to_string()).await;
+            let mut failures = vec![format!("egress apply: {error}")];
+            if let Err(reset_error) = self.egress.reset().await {
+                failures.push(format!("egress reset: {reset_error}"));
+            }
+            if let Err(cleanup_error) = clear_runtime_dir(&self.runtime_dir) {
+                failures.push(format!("session cleanup: {cleanup_error}"));
+            }
+            return self.fail(failures.join("; ")).await;
         }
         if let Err(error) = self.browser.start(id, &url, profile, egress).await {
-            let _ = self.egress.reset().await;
-            return self.fail(error.to_string()).await;
+            let mut failures = vec![format!("browser start: {error}")];
+            if let Err(stop_error) = self.browser.stop().await {
+                failures.push(format!("browser stop: {stop_error}"));
+            }
+            if let Err(reset_error) = self.egress.reset().await {
+                failures.push(format!("egress reset: {reset_error}"));
+            }
+            if let Err(cleanup_error) = clear_runtime_dir(&self.runtime_dir) {
+                failures.push(format!("session cleanup: {cleanup_error}"));
+            }
+            return self.fail(failures.join("; ")).await;
         }
 
         let mut data = self.inner.write().await;
@@ -570,6 +586,132 @@ mod tests {
         async fn reset(&self) -> Result<crate::netd::EgressResponse, AppError> {
             self.apply(EgressMode::Direct).await
         }
+    }
+
+    struct RecordingEgress {
+        reject_apply: bool,
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl RecordingEgress {
+        fn new(reject_apply: bool) -> Self {
+            Self {
+                reject_apply,
+                calls: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        async fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().await.clone()
+        }
+
+        fn response(mode: EgressMode) -> crate::netd::EgressResponse {
+            crate::netd::EgressResponse {
+                ok: true,
+                active_mode: mode,
+                proxy_url: None,
+                detail: "applied".into(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EgressBackend for RecordingEgress {
+        async fn apply(&self, mode: EgressMode) -> Result<crate::netd::EgressResponse, AppError> {
+            self.calls.lock().await.push("apply");
+            if self.reject_apply {
+                Err(AppError::ServiceUnavailable("apply timed out".into()))
+            } else {
+                Ok(Self::response(mode))
+            }
+        }
+
+        async fn reset(&self) -> Result<crate::netd::EgressResponse, AppError> {
+            self.calls.lock().await.push("reset");
+            Ok(Self::response(EgressMode::Direct))
+        }
+    }
+
+    #[derive(Default)]
+    struct RejectStartBrowser {
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BrowserBackend for RejectStartBrowser {
+        async fn start(
+            &self,
+            _session_id: Uuid,
+            _url: &Url,
+            _profile: StreamProfile,
+            _egress: EgressMode,
+        ) -> Result<(), AppError> {
+            self.calls.lock().await.push("start");
+            Err(AppError::ServiceUnavailable("start timed out".into()))
+        }
+
+        async fn stop(&self) -> Result<(), AppError> {
+            self.calls.lock().await.push("stop");
+            Ok(())
+        }
+
+        async fn navigate(&self, _command: &NavigationCommand) -> Result<(), AppError> {
+            Err(AppError::SessionNotActive)
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_egress_start_resets_policy_and_clears_runtime() {
+        let runtime = tempdir().unwrap();
+        fs::write(runtime.path().join("cookie.db"), "secret").unwrap();
+        let egress = Arc::new(RecordingEgress::new(true));
+        let manager = SessionManager::new(
+            EventBus::new(16),
+            Arc::new(MockBrowser::default()),
+            egress.clone(),
+            runtime.path().to_path_buf(),
+            EgressMode::Direct,
+            StreamProfile::Hd15,
+            1_800,
+        );
+
+        assert!(
+            manager
+                .start(Uuid::new_v4(), Url::parse("https://example.com").unwrap())
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.snapshot().await.phase, SessionPhase::Failed);
+        assert_eq!(egress.calls().await, vec!["apply", "reset"]);
+        assert_eq!(fs::read_dir(runtime.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_browser_start_stops_browser_resets_policy_and_clears_runtime() {
+        let runtime = tempdir().unwrap();
+        fs::write(runtime.path().join("cookie.db"), "secret").unwrap();
+        let browser = Arc::new(RejectStartBrowser::default());
+        let egress = Arc::new(RecordingEgress::new(false));
+        let manager = SessionManager::new(
+            EventBus::new(16),
+            browser.clone(),
+            egress.clone(),
+            runtime.path().to_path_buf(),
+            EgressMode::Direct,
+            StreamProfile::Hd15,
+            1_800,
+        );
+
+        assert!(
+            manager
+                .start(Uuid::new_v4(), Url::parse("https://example.com").unwrap())
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.snapshot().await.phase, SessionPhase::Failed);
+        assert_eq!(browser.calls.lock().await.as_slice(), ["start", "stop"]);
+        assert_eq!(egress.calls().await, vec!["apply", "reset"]);
+        assert_eq!(fs::read_dir(runtime.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

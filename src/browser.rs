@@ -65,14 +65,31 @@ pub struct BrowserResponse {
 #[derive(Clone)]
 pub struct SocketBrowser {
     socket: PathBuf,
+    request_timeout: Duration,
 }
 
 impl SocketBrowser {
-    pub fn new(socket: PathBuf) -> Self {
-        Self { socket }
+    pub fn new(socket: PathBuf, request_timeout: Duration) -> Self {
+        Self {
+            socket,
+            request_timeout,
+        }
     }
 
     async fn request(&self, command: BrowserCommand) -> Result<(), AppError> {
+        self.with_timeout(self.request_unbounded(command)).await
+    }
+
+    async fn with_timeout<F>(&self, request: F) -> Result<(), AppError>
+    where
+        F: std::future::Future<Output = Result<(), AppError>>,
+    {
+        timeout(self.request_timeout, request)
+            .await
+            .map_err(|_| AppError::ServiceUnavailable("browser helper timed out".into()))?
+    }
+
+    async fn request_unbounded(&self, command: BrowserCommand) -> Result<(), AppError> {
         let mut stream = UnixStream::connect(&self.socket)
             .await
             .map_err(|error| AppError::ServiceUnavailable(format!("browser connect: {error}")))?;
@@ -250,5 +267,21 @@ impl BrowserBackend for MockBrowser {
             .await
             .push(format!("navigate:{command:?}"));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod socket_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn socket_browser_times_out_when_helper_never_replies() {
+        let browser = SocketBrowser::new("/unused/browser.sock".into(), Duration::from_millis(20));
+
+        let error = browser
+            .with_timeout(std::future::pending::<Result<(), AppError>>())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("browser helper timed out"));
     }
 }

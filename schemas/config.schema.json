@@ -80,8 +80,8 @@
       "additionalProperties": false,
       "required": ["runtime_dir", "pairing_file", "auth_ttl_seconds", "ticket_ttl_seconds", "auto_burn_seconds", "initial_url", "initial_profile"],
       "properties": {
-        "runtime_dir": { "type": "string", "pattern": "^/run/" },
-        "pairing_file": { "type": "string", "pattern": "^/run/" },
+        "runtime_dir": { "type": "string", "pattern": "^/" },
+        "pairing_file": { "type": "string", "pattern": "^/" },
         "auth_ttl_seconds": { "type": "integer", "minimum": 300 },
         "ticket_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
         "auto_burn_seconds": { "type": "integer", "minimum": 0 },
@@ -96,8 +96,9 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "command": { "type": "string", "minLength": 1 },
-        "socket": { "type": "string", "minLength": 1 },
-        "stop_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
+        "socket": { "type": "string", "pattern": "^/" },
+        "stop_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "ipc_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
       }
     },
     "signaling": {
@@ -119,7 +120,8 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "initial_mode": { "enum": ["direct", "tor", "warp", "wireguard", "proxy"] },
-        "netd_socket": { "type": "string", "pattern": "^/run/" },
+        "netd_socket": { "type": "string", "pattern": "^/" },
+        "ipc_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
         "browser_uid": { "type": "integer", "minimum": 1 },
         "tor_proxy": { "type": "string" },
         "warp_proxy": { "type": "string" },

@@ -51,13 +51,19 @@ async fn main() -> Result<()> {
     let metrics = MetricsCollector::new(blocklist);
     let events = EventBus::new(128);
     let browser: Arc<dyn BrowserBackend> = if config.browser.enabled {
-        Arc::new(SocketBrowser::new(config.browser.socket.clone()))
+        Arc::new(SocketBrowser::new(
+            config.browser.socket.clone(),
+            Duration::from_secs(config.browser.ipc_timeout_seconds),
+        ))
     } else {
         warn!("browser backend is disabled; using deterministic mock backend");
         Arc::new(MockBrowser::default())
     };
     let egress: Arc<dyn EgressBackend> = if config.network.enabled {
-        Arc::new(SocketEgress::new(config.network.netd_socket.clone()))
+        Arc::new(SocketEgress::new(
+            config.network.netd_socket.clone(),
+            Duration::from_secs(config.network.ipc_timeout_seconds),
+        ))
     } else {
         warn!("network helper is disabled; using deterministic mock backend");
         Arc::new(MockEgress::default())

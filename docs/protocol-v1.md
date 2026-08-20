@@ -23,6 +23,8 @@ Event and WebRTC signaling connections use purpose-bound, one-time, short-lived 
 
 The state machine is `idle → starting → active → burning → idle`; an observable `failed` state records redacted lifecycle failures. Only the paired client can hold the controller lease. A successful burn:
 
+Browser and network helper IPC wraps connect, write, and response read in separately configured finite deadlines. Production defaults both to two seconds so an accepted Unix-socket connection that never replies cannot hold the serialized lifecycle indefinitely. Each helper also keeps an internal deadline below the client deadline: browser commands reset the pipeline after 1.5 seconds by default, while netd serializes mutations, reserves 250 ms for its response, and kills a spawned policy command if execution is cancelled. A failed session start queues browser stop, egress reset, and tmpfs cleanup before entering `failed`. The client limits remain tunable from one to thirty seconds for hardware diagnosis; the device-side audit, rather than the configuration value alone, decides whether the five-second Burn SLO passes.
+
 1. marks the session `burning` and closes event delivery;
 2. stops the complete browser/GStreamer cgroup;
 3. restores the default egress policy;

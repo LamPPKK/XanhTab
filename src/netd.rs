@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
     sync::Mutex,
+    time::timeout,
 };
 
 use crate::{config::NetworkConfig, error::AppError, model::EgressMode};
@@ -47,14 +48,31 @@ pub trait EgressBackend: Send + Sync {
 
 pub struct SocketEgress {
     socket: PathBuf,
+    request_timeout: Duration,
 }
 
 impl SocketEgress {
-    pub fn new(socket: PathBuf) -> Self {
-        Self { socket }
+    pub fn new(socket: PathBuf, request_timeout: Duration) -> Self {
+        Self {
+            socket,
+            request_timeout,
+        }
     }
 
     async fn request(&self, command: EgressCommand) -> Result<EgressResponse, AppError> {
+        self.with_timeout(self.request_unbounded(command)).await
+    }
+
+    async fn with_timeout<F>(&self, request: F) -> Result<EgressResponse, AppError>
+    where
+        F: std::future::Future<Output = Result<EgressResponse, AppError>>,
+    {
+        timeout(self.request_timeout, request)
+            .await
+            .map_err(|_| AppError::ServiceUnavailable("network helper timed out".into()))?
+    }
+
+    async fn request_unbounded(&self, command: EgressCommand) -> Result<EgressResponse, AppError> {
         let mut stream = UnixStream::connect(&self.socket)
             .await
             .map_err(|error| AppError::ServiceUnavailable(format!("netd connect: {error}")))?;
@@ -201,6 +219,17 @@ fn add_drop(script: &mut String, uid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn socket_egress_times_out_when_helper_never_replies() {
+        let egress = SocketEgress::new("/unused/netd.sock".into(), Duration::from_millis(20));
+
+        let error = egress
+            .with_timeout(std::future::pending::<Result<EgressResponse, AppError>>())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("network helper timed out"));
+    }
 
     #[test]
     fn egress_plan_only_uses_allowlisted_programs_without_a_shell() {

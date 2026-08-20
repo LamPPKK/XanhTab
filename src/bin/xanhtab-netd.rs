@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process::Stdio};
+use std::{fs, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -6,6 +6,8 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     process::Command,
+    sync::Mutex,
+    time::timeout,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -52,34 +54,52 @@ async fn main() -> Result<()> {
     }
     info!(socket = %config.network.netd_socket.display(), "xanhtab-netd ready");
     let dry_run = args.dry_run;
+    let operation_lock = Arc::new(Mutex::new(()));
     loop {
         let (stream, _) = listener.accept().await?;
         let network = config.network.clone();
+        let operation_lock = operation_lock.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle(stream, network, dry_run).await {
+            if let Err(error) = handle(stream, network, dry_run, operation_lock).await {
                 error!(%error, "netd request failed");
             }
         });
     }
 }
 
-async fn handle(stream: UnixStream, config: NetworkConfig, dry_run: bool) -> Result<()> {
+async fn handle(
+    stream: UnixStream,
+    config: NetworkConfig,
+    dry_run: bool,
+    operation_lock: Arc<Mutex<()>>,
+) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut line = String::new();
-    BufReader::new(reader).read_line(&mut line).await?;
+    let client_deadline = Duration::from_secs(config.ipc_timeout_seconds);
+    timeout(client_deadline, BufReader::new(reader).read_line(&mut line))
+        .await
+        .context("netd request read timed out")??;
     let request: EgressRequest = serde_json::from_str(&line).context("invalid request")?;
     if request.version != 1 {
         anyhow::bail!("unsupported netd protocol version");
     }
-    let result = match request.command {
-        EgressCommand::Apply { mode } => apply(&config, mode, dry_run).await,
-        EgressCommand::Reset => apply(&config, EgressMode::Direct, dry_run).await,
-        EgressCommand::Status => Ok(EgressResponse {
-            ok: true,
-            active_mode: EgressMode::Direct,
-            proxy_url: None,
-            detail: "status is intentionally stateless in v1".into(),
-        }),
+    let _guard = operation_lock.lock().await;
+    let result = match timeout(helper_deadline(config.ipc_timeout_seconds), async {
+        match request.command {
+            EgressCommand::Apply { mode } => apply(&config, mode, dry_run).await,
+            EgressCommand::Reset => apply(&config, EgressMode::Direct, dry_run).await,
+            EgressCommand::Status => Ok(EgressResponse {
+                ok: true,
+                active_mode: EgressMode::Direct,
+                proxy_url: None,
+                detail: "status is intentionally stateless in v1".into(),
+            }),
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!("netd command timed out")),
     };
     let response = result.unwrap_or_else(|error| EgressResponse {
         ok: false,
@@ -91,6 +111,15 @@ async fn handle(stream: UnixStream, config: NetworkConfig, dry_run: bool) -> Res
     payload.push(b'\n');
     writer.write_all(&payload).await?;
     Ok(())
+}
+
+fn helper_deadline(ipc_timeout_seconds: u64) -> Duration {
+    Duration::from_millis(
+        ipc_timeout_seconds
+            .saturating_mul(1_000)
+            .saturating_sub(250)
+            .max(1),
+    )
 }
 
 async fn apply(config: &NetworkConfig, mode: EgressMode, dry_run: bool) -> Result<EgressResponse> {
@@ -132,7 +161,8 @@ async fn run_plan(plan: &[CommandSpec], dry_run: bool, allow_existing_table: boo
         command
             .args(&spec.args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         command.stdin(if spec.stdin.is_some() {
             Stdio::piped()
         } else {
@@ -167,4 +197,15 @@ async fn run_plan(plan: &[CommandSpec], dry_run: bool, allow_existing_table: boo
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn helper_deadline_leaves_time_for_the_response() {
+        assert_eq!(helper_deadline(1), Duration::from_millis(750));
+        assert_eq!(helper_deadline(2), Duration::from_millis(1_750));
+    }
 }

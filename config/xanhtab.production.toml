@@ -21,7 +21,8 @@ initial_profile = "1080p30"
 enabled = true
 command = "/usr/local/libexec/xanhtab-browser"
 socket = "/run/xanhtab/browser.sock"
-stop_timeout_seconds = 5
+stop_timeout_seconds = 2
+ipc_timeout_seconds = 2
 
 [signaling]
 enabled = true
@@ -34,6 +35,7 @@ plugin_directory = "/usr/lib/xanhtab/gstreamer-1.0"
 enabled = true
 initial_mode = "direct"
 netd_socket = "/run/xanhtab/netd.sock"
+ipc_timeout_seconds = 2
 browser_uid = 988
 tor_proxy = "socks5h://127.0.0.1:9050"
 warp_proxy = "socks5h://127.0.0.1:40000"

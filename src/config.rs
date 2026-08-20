@@ -53,6 +53,7 @@ pub struct BrowserConfig {
     pub command: PathBuf,
     pub socket: PathBuf,
     pub stop_timeout_seconds: u64,
+    pub ipc_timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +72,7 @@ pub struct NetworkConfig {
     pub enabled: bool,
     pub initial_mode: EgressMode,
     pub netd_socket: PathBuf,
+    pub ipc_timeout_seconds: u64,
     pub browser_uid: u32,
     pub tor_proxy: String,
     pub warp_proxy: String,
@@ -123,7 +125,8 @@ impl Default for BrowserConfig {
             enabled: false,
             command: PathBuf::from("/usr/local/libexec/xanhtab-browser"),
             socket: PathBuf::from("/run/xanhtab/browser.sock"),
-            stop_timeout_seconds: 5,
+            stop_timeout_seconds: 2,
+            ipc_timeout_seconds: 2,
         }
     }
 }
@@ -146,6 +149,7 @@ impl Default for NetworkConfig {
             enabled: false,
             initial_mode: EgressMode::Direct,
             netd_socket: PathBuf::from("/run/xanhtab/netd.sock"),
+            ipc_timeout_seconds: 2,
             browser_uid: 988,
             tor_proxy: "socks5://127.0.0.1:9050".into(),
             warp_proxy: "socks5://127.0.0.1:40000".into(),
@@ -264,6 +268,12 @@ impl Config {
         }
         if self.session.ticket_ttl_seconds == 0 || self.session.ticket_ttl_seconds > 300 {
             bail!("ticket_ttl_seconds must be between 1 and 300");
+        }
+        if !(1..=30).contains(&self.browser.stop_timeout_seconds)
+            || !(1..=30).contains(&self.browser.ipc_timeout_seconds)
+            || !(1..=30).contains(&self.network.ipc_timeout_seconds)
+        {
+            bail!("browser and network lifecycle timeouts must be between 1 and 30 seconds");
         }
         if self.network.browser_uid == 0 {
             bail!("browser_uid must not be root");
@@ -389,6 +399,21 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.session.runtime_dir = PathBuf::from("/run/xanhtab/../../etc");
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn lifecycle_timeouts_have_finite_bounds() {
+        let mut config = Config::default();
+        config.browser.ipc_timeout_seconds = 0;
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.network.ipc_timeout_seconds = 31;
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.browser.stop_timeout_seconds = 31;
         assert!(config.validate().is_err());
     }
 

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process::Stdio};
+use std::{fs, path::PathBuf, process::Stdio, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -6,6 +6,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     process::{Child, Command},
+    time::timeout,
 };
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -37,6 +38,9 @@ struct Args {
     /// Use newline-delimited JSON over stdin for the hardware gate harness.
     #[arg(long)]
     stdio: bool,
+    /// Helper-side command deadline; kept below the daemon IPC timeout.
+    #[arg(long, default_value_t = 1_500)]
+    command_timeout_ms: u64,
 }
 
 struct Pipeline {
@@ -132,7 +136,8 @@ impl Pipeline {
             .args(&gst_args)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
         if let Some(proxy) = proxy_for(self.egress)? {
             command
                 .env("http_proxy", &proxy)
@@ -272,6 +277,9 @@ async fn main() -> Result<()> {
         .compact()
         .init();
     let args = Args::parse();
+    if args.command_timeout_ms == 0 || args.command_timeout_ms > 30_000 {
+        bail!("command timeout must be between 1 and 30000 milliseconds");
+    }
     if args.stdio {
         return run_stdio(&args).await;
     }
@@ -301,29 +309,45 @@ async fn main() -> Result<()> {
 async fn run_stdio(args: &Args) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut pipeline = Pipeline::default();
+    let deadline = Duration::from_millis(args.command_timeout_ms);
     while let Some(line) = lines.next_line().await? {
         let command: BrowserCommand =
             serde_json::from_str(&line).context("invalid bridge command")?;
-        pipeline.apply(command, args).await?;
+        timeout(deadline, pipeline.apply(command, args))
+            .await
+            .context("browser command timed out")??;
     }
-    pipeline.stop().await?;
+    timeout(deadline, pipeline.stop())
+        .await
+        .context("browser stop timed out")??;
     Ok(())
 }
 
 async fn handle(stream: UnixStream, pipeline: &mut Pipeline, args: &Args) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut line = String::new();
-    BufReader::new(reader).read_line(&mut line).await?;
+    let deadline = Duration::from_millis(args.command_timeout_ms);
+    timeout(deadline, BufReader::new(reader).read_line(&mut line))
+        .await
+        .context("browser request read timed out")??;
     let response = match serde_json::from_str::<BrowserCommand>(&line) {
-        Ok(command) => match pipeline.apply(command, args).await {
-            Ok(()) => BrowserResponse {
+        Ok(command) => match timeout(deadline, pipeline.apply(command, args)).await {
+            Ok(Ok(())) => BrowserResponse {
                 ok: true,
                 detail: "browser command applied".into(),
             },
-            Err(error) => BrowserResponse {
+            Ok(Err(error)) => BrowserResponse {
                 ok: false,
                 detail: error.to_string(),
             },
+            Err(_) => {
+                let _ = timeout(deadline, pipeline.stop()).await;
+                *pipeline = Pipeline::default();
+                BrowserResponse {
+                    ok: false,
+                    detail: "browser command timed out".into(),
+                }
+            }
         },
         Err(error) => BrowserResponse {
             ok: false,
