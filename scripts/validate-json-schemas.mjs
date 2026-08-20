@@ -96,3 +96,11 @@ expectValid("rendered release manifest", releaseManifestSchema, releaseManifest)
 const releaseManifestWithInvalidChecksum = clone(releaseManifest);
 releaseManifestWithInvalidChecksum.artifacts[0].sha256 = "not-a-sha256";
 expectInvalid("release manifest invalid checksum", releaseManifestSchema, releaseManifestWithInvalidChecksum);
+
+const releaseManifestWithDuplicateArtifact = clone(releaseManifest);
+releaseManifestWithDuplicateArtifact.artifacts.push(clone(releaseManifest.artifacts[0]));
+expectInvalid("release manifest duplicate ARM64 artifact", releaseManifestSchema, releaseManifestWithDuplicateArtifact);
+
+const releaseManifestWithCredentialUrl = clone(releaseManifest);
+releaseManifestWithCredentialUrl.artifacts[0].url = "https://user@releases.example/xanhtab.tar.zst";
+expectInvalid("release manifest credential URL", releaseManifestSchema, releaseManifestWithCredentialUrl);

@@ -103,24 +103,25 @@ cleanup() {
   fi
   exit "$status"
 }
-trap cleanup EXIT
 
-while (($#)); do
-  case "$1" in
-    --dry-run) DRY_RUN=1; shift ;;
-    --non-interactive) NON_INTERACTIVE=1; shift ;;
-    --repair) REPAIR=1; shift ;;
-    --uninstall) UNINSTALL=1; shift ;;
-    --config-repo) [[ $# -ge 2 ]] || die "--config-repo requires a value"; CONFIG_REPO="$2"; shift 2 ;;
-    --config-ref) [[ $# -ge 2 ]] || die "--config-ref requires a value"; CONFIG_REF="$2"; shift 2 ;;
-    --network) [[ $# -ge 2 ]] || die "--network requires a value"; NETWORK="$2"; shift 2 ;;
-    --secrets-file) [[ $# -ge 2 ]] || die "--secrets-file requires a value"; SECRETS_FILE="$2"; shift 2 ;;
-    --manifest-url) [[ $# -ge 2 ]] || die "--manifest-url requires a value"; MANIFEST_URL="$2"; shift 2 ;;
-    --public-key) [[ $# -ge 2 ]] || die "--public-key requires a value"; PUBLIC_KEY="$2"; shift 2 ;;
-    --help|-h) usage ;;
-    *) die "unknown argument: $1" ;;
-  esac
-done
+parse_arguments() {
+  while (($#)); do
+    case "$1" in
+      --dry-run) DRY_RUN=1; shift ;;
+      --non-interactive) NON_INTERACTIVE=1; shift ;;
+      --repair) REPAIR=1; shift ;;
+      --uninstall) UNINSTALL=1; shift ;;
+      --config-repo) [[ $# -ge 2 ]] || die "--config-repo requires a value"; CONFIG_REPO="$2"; shift 2 ;;
+      --config-ref) [[ $# -ge 2 ]] || die "--config-ref requires a value"; CONFIG_REF="$2"; shift 2 ;;
+      --network) [[ $# -ge 2 ]] || die "--network requires a value"; NETWORK="$2"; shift 2 ;;
+      --secrets-file) [[ $# -ge 2 ]] || die "--secrets-file requires a value"; SECRETS_FILE="$2"; shift 2 ;;
+      --manifest-url) [[ $# -ge 2 ]] || die "--manifest-url requires a value"; MANIFEST_URL="$2"; shift 2 ;;
+      --public-key) [[ $# -ge 2 ]] || die "--public-key requires a value"; PUBLIC_KEY="$2"; shift 2 ;;
+      --help|-h) usage ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+}
 
 validate_arguments() {
   [[ "$NETWORK" =~ ^(direct|tor|warp|wireguard|proxy)$ ]] || die "unsupported network mode: $NETWORK"
@@ -213,6 +214,43 @@ uninstall_xanhtab() {
   log "uninstalled; persistent blocklist and backups were retained"
 }
 
+validate_release_manifest() {
+  local manifest="$1"
+  jq -e '
+    def exact_keys($expected):
+      type == "object" and keys == $expected;
+    def matching_string($pattern):
+      type == "string" and (try test($pattern) catch false);
+
+    exact_keys([
+      "artifacts",
+      "component_versions",
+      "config_schema_version",
+      "gstreamer_abi",
+      "schema_version",
+      "version"
+    ]) and
+    .schema_version == 1 and
+    (.version | matching_string("^[0-9]+\\.[0-9]+\\.[0-9]+([.-][A-Za-z0-9.-]+)?$")) and
+    .config_schema_version == 1 and
+    .gstreamer_abi == "1.0" and
+    (.component_versions |
+      exact_keys(["gstreamer", "rswebrtc", "wpe_webkit"]) and
+      (.gstreamer | type == "string" and length > 0) and
+      (.rswebrtc | type == "string" and length > 0) and
+      (.wpe_webkit | type == "string" and length > 0)) and
+    (.artifacts |
+      type == "array" and
+      length == 1 and
+      all(.[];
+        exact_keys(["name", "platform", "sha256", "url"]) and
+        .platform == "linux-aarch64" and
+        (.name | matching_string("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+        (.url | matching_string("^https://[^/?#@]+/[^[:space:]]+$")) and
+        (.sha256 | matching_string("^[0-9a-f]{64}$"))))
+  ' "$manifest" >/dev/null
+}
+
 download_and_verify_release() {
   local manifest="$WORK_DIR/release-manifest.json"
   local signature="$WORK_DIR/release-manifest.json.minisig"
@@ -222,14 +260,11 @@ download_and_verify_release() {
     return
   fi
   minisign -Vm "$manifest" -x "$signature" -p "$PUBLIC_KEY" >/dev/null
-  jq -e '.schema_version == 1 and (.version | type == "string") and .config_schema_version == 1 and .gstreamer_abi == "1.0" and (.component_versions.rswebrtc | type == "string") and (.artifacts | type == "array")' "$manifest" >/dev/null || die "invalid release manifest schema"
+  validate_release_manifest "$manifest" || die "invalid release manifest schema"
   local url expected name archive actual
-  url="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .url' "$manifest")"
-  expected="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .sha256' "$manifest")"
-  name="$(jq -er '.artifacts[] | select(.platform == "linux-aarch64") | .name' "$manifest")"
-  [[ "$url" =~ ^https:// ]] || die "release artifact URL must use HTTPS"
-  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$name" != "." && "$name" != ".." ]] || die "invalid release artifact name"
-  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "invalid artifact checksum"
+  url="$(jq -er '.artifacts[0].url' "$manifest")"
+  expected="$(jq -er '.artifacts[0].sha256' "$manifest")"
+  name="$(jq -er '.artifacts[0].name' "$manifest")"
   archive="$WORK_DIR/$name"
   curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$url"
   actual="$(sha256sum "$archive" | awk '{print $1}')"
@@ -536,19 +571,27 @@ activate_and_healthcheck() {
   die "health check failed; transaction will be rolled back and its backup retained under $BACKUP_ROOT"
 }
 
-validate_arguments
-if [[ "$UNINSTALL" == 1 ]]; then
-  [[ "$(id -u)" == 0 || "$DRY_RUN" == 1 ]] || die "uninstall requires root"
-  uninstall_xanhtab
-  exit 0
+main() {
+  trap cleanup EXIT
+  parse_arguments "$@"
+  validate_arguments
+  if [[ "$UNINSTALL" == 1 ]]; then
+    [[ "$(id -u)" == 0 || "$DRY_RUN" == 1 ]] || die "uninstall requires root"
+    uninstall_xanhtab
+    exit 0
+  fi
+  preflight
+  WORK_DIR="$(mktemp -d -t xanhtab-install.XXXXXXXX)"
+  download_and_verify_release
+  install_system_dependencies
+  validate_runtime_abi
+  [[ "$DRY_RUN" == 1 ]] || sync_public_config
+  install_release
+  activate_and_healthcheck
+  INSTALL_COMMITTED=1
+  log "installation complete"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
-preflight
-WORK_DIR="$(mktemp -d -t xanhtab-install.XXXXXXXX)"
-download_and_verify_release
-install_system_dependencies
-validate_runtime_abi
-[[ "$DRY_RUN" == 1 ]] || sync_public_config
-install_release
-activate_and_healthcheck
-INSTALL_COMMITTED=1
-log "installation complete"

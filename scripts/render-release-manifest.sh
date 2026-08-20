@@ -16,9 +16,9 @@ readonly RS_WEBRTC_VERSION="$7"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] \
   || { printf '%s\n' 'VERSION is invalid' >&2; exit 2; }
-[[ -n "$ARTIFACT_NAME" && "$ARTIFACT_NAME" != */* ]] \
-  || { printf '%s\n' 'ARTIFACT_NAME must be a basename' >&2; exit 2; }
-[[ "$ARTIFACT_URL" =~ ^https://[^[:space:]]+$ ]] \
+[[ "$ARTIFACT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+  || { printf '%s\n' 'ARTIFACT_NAME must be a safe basename' >&2; exit 2; }
+[[ "$ARTIFACT_URL" =~ ^https://[^/?#@]+/[^[:space:]]+$ ]] \
   || { printf '%s\n' 'ARTIFACT_URL must use HTTPS' >&2; exit 2; }
 [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] \
   || { printf '%s\n' 'SHA256 must contain 64 lowercase hexadecimal characters' >&2; exit 2; }
