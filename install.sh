@@ -373,6 +373,20 @@ install_release() {
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/xanhtab.toml ]]; then
     run install -m 0640 "$release/config/xanhtab.production.toml" /etc/xanhtab/xanhtab.toml
   fi
+  if [[ "$DRY_RUN" == 0 ]]; then
+    local control_uid browser_uid
+    control_uid="$(id -u xanhtab)"
+    browser_uid="$(id -u xanhtab-browser)"
+    [[ "$control_uid" != "$browser_uid" ]] || die "control-plane and browser service UIDs must differ"
+    if grep -q '^control_uid = ' /etc/xanhtab/xanhtab.toml; then
+      sed -i "s/^control_uid = .*/control_uid = $control_uid/" /etc/xanhtab/xanhtab.toml
+    else
+      sed -i "/^netd_socket = /a control_uid = $control_uid" /etc/xanhtab/xanhtab.toml
+    fi
+    sed -i "s/^browser_uid = .*/browser_uid = $browser_uid/" /etc/xanhtab/xanhtab.toml
+  else
+    log "would pin network control/browser UIDs to the resolved service accounts"
+  fi
   run chown root:xanhtab /etc/xanhtab/xanhtab.toml
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/custom_hosts.txt ]]; then
     run install -o root -g xanhtab -m 0640 "$release/config/custom_hosts.txt" /etc/xanhtab/custom_hosts.txt

@@ -73,6 +73,7 @@ pub struct NetworkConfig {
     pub initial_mode: EgressMode,
     pub netd_socket: PathBuf,
     pub ipc_timeout_seconds: u64,
+    pub control_uid: Option<u32>,
     pub browser_uid: u32,
     pub tor_proxy: String,
     pub warp_proxy: String,
@@ -150,6 +151,7 @@ impl Default for NetworkConfig {
             initial_mode: EgressMode::Direct,
             netd_socket: PathBuf::from("/run/xanhtab/netd.sock"),
             ipc_timeout_seconds: 2,
+            control_uid: None,
             browser_uid: 988,
             tor_proxy: "socks5://127.0.0.1:9050".into(),
             warp_proxy: "socks5://127.0.0.1:40000".into(),
@@ -278,6 +280,18 @@ impl Config {
         if self.network.browser_uid == 0 {
             bail!("browser_uid must not be root");
         }
+        if self
+            .network
+            .control_uid
+            .is_some_and(|uid| uid == 0 || uid == self.network.browser_uid)
+        {
+            bail!("control_uid must be non-root and distinct from browser_uid");
+        }
+        if self.network.control_uid.is_none()
+            && (!self.server.allow_insecure_http || self.network.enabled)
+        {
+            bail!("network.control_uid is required whenever the real network backend is enabled");
+        }
         if !is_normalized_absolute(&self.session.runtime_dir)
             || self.session.runtime_dir == Path::new("/")
             || self.session.runtime_dir.components().count() < 3
@@ -393,6 +407,20 @@ mod tests {
     }
 
     #[test]
+    fn network_control_uid_cannot_be_root_or_browser() {
+        let mut config = Config::default();
+        config.network.control_uid = Some(0);
+        assert!(config.validate().is_err());
+
+        config.network.control_uid = Some(config.network.browser_uid);
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.network.enabled = true;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn runtime_directory_cannot_be_a_broad_path() {
         let mut config = Config::default();
         config.session.runtime_dir = PathBuf::from("/");
@@ -461,6 +489,7 @@ mod tests {
 
         config.browser.enabled = true;
         config.network.enabled = true;
+        config.network.control_uid = Some(987);
         config.signaling.enabled = true;
         assert!(config.validate().is_ok());
     }

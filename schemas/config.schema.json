@@ -41,6 +41,7 @@
           },
           "signaling": { "properties": { "enabled": { "const": true } } },
           "network": {
+            "required": ["control_uid"],
             "properties": {
               "enabled": { "const": true },
               "netd_socket": { "pattern": "^/run/" }
@@ -122,6 +123,7 @@
         "initial_mode": { "enum": ["direct", "tor", "warp", "wireguard", "proxy"] },
         "netd_socket": { "type": "string", "pattern": "^/" },
         "ipc_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "control_uid": { "type": "integer", "minimum": 1 },
         "browser_uid": { "type": "integer", "minimum": 1 },
         "tor_proxy": { "type": "string" },
         "warp_proxy": { "type": "string" },

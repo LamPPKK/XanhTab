@@ -73,6 +73,11 @@ async fn handle(
     dry_run: bool,
     operation_lock: Arc<Mutex<()>>,
 ) -> Result<()> {
+    let peer_uid = stream
+        .peer_cred()
+        .context("failed to read netd peer credentials")?
+        .uid();
+    authorize_peer_uid(peer_uid, config.control_uid, config.browser_uid)?;
     let (reader, mut writer) = stream.into_split();
     let mut line = String::new();
     let client_deadline = Duration::from_secs(config.ipc_timeout_seconds);
@@ -111,6 +116,15 @@ async fn handle(
     payload.push(b'\n');
     writer.write_all(&payload).await?;
     Ok(())
+}
+
+fn authorize_peer_uid(peer_uid: u32, control_uid: Option<u32>, browser_uid: u32) -> Result<()> {
+    match control_uid {
+        Some(expected) if peer_uid == expected => Ok(()),
+        Some(_) => anyhow::bail!("netd peer is not the configured control-plane UID"),
+        None if peer_uid != browser_uid => Ok(()),
+        None => anyhow::bail!("browser UID is not authorized to call netd"),
+    }
 }
 
 fn helper_deadline(ipc_timeout_seconds: u64) -> Duration {
@@ -207,5 +221,19 @@ mod tests {
     fn helper_deadline_leaves_time_for_the_response() {
         assert_eq!(helper_deadline(1), Duration::from_millis(750));
         assert_eq!(helper_deadline(2), Duration::from_millis(1_750));
+    }
+
+    #[test]
+    fn production_peer_allowlist_rejects_browser_and_other_uids() {
+        assert!(authorize_peer_uid(987, Some(987), 988).is_ok());
+        assert!(authorize_peer_uid(988, Some(987), 988).is_err());
+        assert!(authorize_peer_uid(1000, Some(987), 988).is_err());
+        assert!(authorize_peer_uid(0, Some(987), 988).is_err());
+    }
+
+    #[test]
+    fn development_fallback_still_rejects_browser_uid() {
+        assert!(authorize_peer_uid(501, None, 988).is_ok());
+        assert!(authorize_peer_uid(988, None, 988).is_err());
     }
 }

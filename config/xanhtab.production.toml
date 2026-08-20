@@ -36,6 +36,8 @@ enabled = true
 initial_mode = "direct"
 netd_socket = "/run/xanhtab/netd.sock"
 ipc_timeout_seconds = 2
+# Installer replaces this with the actual xanhtab service UID.
+control_uid = 987
 browser_uid = 988
 tor_proxy = "socks5h://127.0.0.1:9050"
 warp_proxy = "socks5h://127.0.0.1:40000"
