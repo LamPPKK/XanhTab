@@ -21,6 +21,9 @@ jobs:
       - run: cargo test --all-targets --locked
       - run: bash -n install.sh scripts/*.sh
       - run: scripts/test-x0-preflight.sh
+      - run: scripts/test-x0-encoder-probe.sh
+      - run: (cd benchmarks/x0-encoder-2026-08-20 && sha256sum -c SHA256SUMS)
+      - run: jq -e '.verdict.status == "no-go" and (.profiles | length == 4) and all(.profiles[]; .passed == false and .classification == "frame-processing-error")' benchmarks/x0-encoder-2026-08-20/summary.json
       - run: scripts/x1-burn-audit.sh --dry-run | jq -e '.dry_run == true and .burn_slo_ms == 5000 and (.base_origin | startswith("https://")) and (.runtime_dir | startswith("/run/")) and (.output | startswith("/run/")) and (keys == ["base_origin", "browser_service", "burn_slo_ms", "dry_run", "output", "runtime_dir", "schema_version"])'
       - run: '! scripts/x1-burn-audit.sh --dry-run --base-url https://user@xanhtab.local:8443'
       - run: '! scripts/x1-burn-audit.sh --dry-run --output /run/../tmp/audit.json'

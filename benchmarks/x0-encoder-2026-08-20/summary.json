@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-20T13:57:45Z",
+  "device": "/dev/video11",
+  "preflight": {
+    "schema_version": 1,
+    "captured_at": "2026-08-20T13:57:43Z",
+    "os": {
+      "id": "debian",
+      "codename": "trixie"
+    },
+    "hardware": {
+      "model": "Raspberry Pi Zero 2 W Rev 1.0",
+      "architecture": "aarch64",
+      "kernel": "6.18.34+rpt-rpi-v8",
+      "firmware": "May 21 2026 11:21:57  Copyright (c) 2012 Broadcom version 288930ab4712b99596f32732664aaaeb881ef1e0 (clean) (release) (start)",
+      "cma_kib": 262144
+    },
+    "devices": {
+      "encoder_video11": true,
+      "render_node": true
+    },
+    "cgroups": {
+      "version": "v2",
+      "memory_controller": false,
+      "cmdline_memory_disabled": true
+    },
+    "gstreamer": {
+      "version": "gst-launch-1.0 version 1.26.2",
+      "plugin_abi": "1.0",
+      "rswebrtc_version": "unavailable",
+      "elements": {
+        "wpesrc": false,
+        "webrtcsink": false,
+        "v4l2h264enc": true,
+        "h264parse": true,
+        "opusenc": true
+      }
+    }
+  },
+  "profiles": [
+    {
+      "profile": "480p10",
+      "width": 854,
+      "height": 480,
+      "fps": 10,
+      "frames": 60,
+      "exit_code": 1,
+      "duration_ms": 271,
+      "passed": false,
+      "classification": "frame-processing-error",
+      "log_file": "logs/480p10.log"
+    },
+    {
+      "profile": "720p15",
+      "width": 1280,
+      "height": 720,
+      "fps": 15,
+      "frames": 60,
+      "exit_code": 1,
+      "duration_ms": 260,
+      "passed": false,
+      "classification": "frame-processing-error",
+      "log_file": "logs/720p15.log"
+    },
+    {
+      "profile": "720p30",
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "frames": 60,
+      "exit_code": 1,
+      "duration_ms": 258,
+      "passed": false,
+      "classification": "frame-processing-error",
+      "log_file": "logs/720p30.log"
+    },
+    {
+      "profile": "1080p30",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "frames": 60,
+      "exit_code": 1,
+      "duration_ms": 278,
+      "passed": false,
+      "classification": "frame-processing-error",
+      "log_file": "logs/1080p30.log"
+    }
+  ],
+  "verdict": {
+    "emergency_480p10": false,
+    "release_floor_720p15": false,
+    "all_profiles": false,
+    "status": "no-go"
+  }
+}

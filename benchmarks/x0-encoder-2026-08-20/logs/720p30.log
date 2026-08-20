@@ -1,0 +1,8 @@
+ERROR: from element /GstPipeline:pipeline0/v4l2h264enc:v4l2h264enc0: Failed to process frame.
+Additional debug info:
+../sys/v4l2/gstv4l2videoenc.c(898): gst_v4l2_video_enc_handle_frame (): /GstPipeline:pipeline0/v4l2h264enc:v4l2h264enc0:
+Maybe be due to not enough memory or failing driver
+ERROR: from element /GstPipeline:pipeline0/GstVideoTestSrc:videotestsrc0: Internal data stream error.
+Additional debug info:
+../libs/gst/base/gstbasesrc.c(3187): gst_base_src_loop (): /GstPipeline:pipeline0/GstVideoTestSrc:videotestsrc0:
+streaming stopped, reason error (-5)

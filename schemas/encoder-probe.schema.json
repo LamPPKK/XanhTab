@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireball.example/schemas/xanhtab-encoder-probe-v1.json",
+  "title": "XanhTab Gate X0 encoder probe v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "captured_at",
+    "device",
+    "preflight",
+    "profiles",
+    "verdict"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "device": {
+      "type": "string",
+      "pattern": "^/dev/"
+    },
+    "preflight": {
+      "type": "object"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile",
+          "width",
+          "height",
+          "fps",
+          "frames",
+          "exit_code",
+          "duration_ms",
+          "passed",
+          "classification",
+          "log_file"
+        ],
+        "properties": {
+          "profile": {
+            "enum": ["480p10", "720p15", "720p30", "1080p30"]
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fps": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "frames": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "exit_code": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "classification": {
+            "enum": [
+              "passed",
+              "timeout",
+              "frame-processing-error",
+              "negotiation-error",
+              "device-access-error",
+              "pipeline-error"
+            ]
+          },
+          "log_file": {
+            "type": "string",
+            "pattern": "^logs/[A-Za-z0-9.-]+\\.log$"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emergency_480p10",
+        "release_floor_720p15",
+        "all_profiles",
+        "status"
+      ],
+      "properties": {
+        "emergency_480p10": {
+          "type": "boolean"
+        },
+        "release_floor_720p15": {
+          "type": "boolean"
+        },
+        "all_profiles": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": ["release-floor-pass", "no-go"]
+        }
+      }
+    }
+  }
+}
