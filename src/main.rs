@@ -1,6 +1,6 @@
 use std::{fs::OpenOptions, io::Write, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use tracing::{info, warn};
@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
     let config = Arc::new(config);
 
     let blocklist = Blocklist::open(&config.blocklist.fst_path)?;
+    ensure_runtime_blocklist(&config, &blocklist)?;
     let metrics = MetricsCollector::new(blocklist.clone());
     let events = EventBus::new(128);
     let browser: Arc<dyn BrowserBackend> = if config.browser.enabled {
@@ -157,6 +158,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn ensure_runtime_blocklist(config: &Config, blocklist: &Blocklist) -> Result<()> {
+    if !config.server.allow_insecure_http && blocklist.is_empty() {
+        bail!("production blocklist must exist and contain at least one hostname");
+    }
+    Ok(())
+}
+
 fn spawn_lifecycle_watchdog(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -178,4 +186,21 @@ fn spawn_lifecycle_watchdog(state: AppState) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_refuses_a_missing_or_empty_blocklist() {
+        let mut config = Config::default();
+        config.server.allow_insecure_http = false;
+        assert!(ensure_runtime_blocklist(&config, &Blocklist::default()).is_err());
+    }
+
+    #[test]
+    fn development_can_start_without_a_packaged_blocklist() {
+        assert!(ensure_runtime_blocklist(&Config::default(), &Blocklist::default()).is_ok());
+    }
 }

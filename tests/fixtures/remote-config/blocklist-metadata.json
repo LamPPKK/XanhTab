@@ -5,9 +5,13 @@
   "sources": [
     {
       "name": "example-source",
+      "file": "example-source.hosts",
       "url": "https://lists.example/blocklist.txt",
       "revision": "v1.0.0",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "license": "MIT",
+      "license_url": "https://lists.example/license.txt",
+      "redistribution": "reviewed"
     }
   ]
 }

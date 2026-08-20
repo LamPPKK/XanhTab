@@ -16,13 +16,19 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "url", "revision", "sha256"],
+        "required": ["name", "file", "url", "revision", "sha256", "license", "license_url", "redistribution"],
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*[A-Za-z0-9._-]$|^[A-Za-z0-9]$"
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
           },
           "url": {
             "type": "string",
@@ -35,7 +41,19 @@
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
           },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "license": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[!-~](?:[ -~]*[!-~])?$"
+          },
+          "license_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/?#@]+(?:/|$)"
+          },
+          "redistribution": { "enum": ["reviewed", "external_fetch_only"] }
         }
       }
     }

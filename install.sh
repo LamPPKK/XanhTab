@@ -28,6 +28,7 @@ INSTALL_TARGETS=(
   /usr/local/libexec/xanhtab-browser
   /usr/local/libexec/xanhtab-netd
   /usr/local/libexec/xanhtab-blocklist
+  /usr/local/libexec/xanhtab-validate-blocklist-release
   /usr/local/libexec/xanhtab-x1-burn-audit
   /usr/share/xanhtab
   /usr/lib/xanhtab
@@ -202,6 +203,7 @@ uninstall_xanhtab() {
     /usr/local/libexec/xanhtab-browser \
     /usr/local/libexec/xanhtab-netd \
     /usr/local/libexec/xanhtab-blocklist \
+    /usr/local/libexec/xanhtab-validate-blocklist-release \
     /usr/local/libexec/xanhtab-x1-burn-audit \
     /etc/systemd/system/xanhtabd.service \
     /etc/systemd/system/xanhtab-browser.service \
@@ -285,9 +287,12 @@ download_and_verify_release() {
     libexec/xanhtab-browser \
     libexec/xanhtab-netd \
     libexec/xanhtab-blocklist \
+    libexec/xanhtab-validate-blocklist-release \
     libexec/xanhtab-x1-burn-audit \
     config/xanhtab.production.toml \
     config/custom_hosts.txt \
+    config/base-blocklist.fst \
+    config/blocklist-metadata.json \
     web/index.html \
     web/internal-home.html \
     systemd/xanhtabd.service \
@@ -308,6 +313,11 @@ download_and_verify_release() {
   done
   (cd "$WORK_DIR/release" && sha256sum --check --strict checksums.sha256 >/dev/null) || die "release component checksum mismatch"
   file "$WORK_DIR/release/plugins/gstreamer-1.0/libgstrswebrtc.so" | grep -Eq 'ARM aarch64|ARM64' || die "rswebrtc plugin is not an ARM64 artifact"
+  "$WORK_DIR/release/libexec/xanhtab-validate-blocklist-release" \
+    "$WORK_DIR/release/config/blocklist-metadata.json" \
+    "$WORK_DIR/release/config/base-blocklist.fst" \
+    "$WORK_DIR/release/libexec/xanhtab-blocklist" \
+    "$WORK_DIR/release/bin/xanhtabd" || die "packaged blocklist artifact is invalid"
 }
 
 validate_runtime_abi() {
@@ -420,6 +430,7 @@ install_release() {
   run install -m 0755 "$release/libexec/xanhtab-browser" /usr/local/libexec/xanhtab-browser
   run install -m 0755 "$release/libexec/xanhtab-netd" /usr/local/libexec/xanhtab-netd
   run install -m 0755 "$release/libexec/xanhtab-blocklist" /usr/local/libexec/xanhtab-blocklist
+  run install -m 0755 "$release/libexec/xanhtab-validate-blocklist-release" /usr/local/libexec/xanhtab-validate-blocklist-release
   run install -m 0755 "$release/libexec/xanhtab-x1-burn-audit" /usr/local/libexec/xanhtab-x1-burn-audit
   run cp -a "$release/web/." /usr/share/xanhtab/web/
   run cp -a "$release/plugins/gstreamer-1.0/." /usr/lib/xanhtab/gstreamer-1.0/
@@ -450,6 +461,8 @@ install_release() {
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/custom_hosts.txt ]]; then
     run install -o root -g xanhtab -m 0640 "$release/config/custom_hosts.txt" /etc/xanhtab/custom_hosts.txt
   fi
+  run install -d -o xanhtab -g xanhtab -m 0750 /var/lib/xanhtab
+  run install -o xanhtab -g xanhtab -m 0644 "$release/config/blocklist-metadata.json" /var/lib/xanhtab/blocklist-metadata.json
   if [[ -d "$WORK_DIR/public-config" ]]; then
     run install -d -o xanhtab -g xanhtab -m 0750 /var/lib/xanhtab/remote-config
     run cp -a "$WORK_DIR/public-config/." /var/lib/xanhtab/remote-config/
@@ -463,7 +476,10 @@ install_release() {
   if [[ "$DRY_RUN" == 0 ]]; then
     sed -i "s/^initial_mode = .*/initial_mode = \"$NETWORK\"/" /etc/xanhtab/xanhtab.toml
     ensure_tls
-    /usr/local/libexec/xanhtab-blocklist --input /etc/xanhtab/custom_hosts.txt --output /var/lib/xanhtab/blocklist.fst
+    /usr/local/libexec/xanhtab-blocklist \
+      --base-fst "$release/config/base-blocklist.fst" \
+      --input /etc/xanhtab/custom_hosts.txt \
+      --output /var/lib/xanhtab/blocklist.fst
     chown xanhtab:xanhtab /var/lib/xanhtab/blocklist.fst
     chmod 0644 /var/lib/xanhtab/blocklist.fst
     /usr/local/bin/xanhtabd --config /etc/xanhtab/xanhtab.toml --check-config

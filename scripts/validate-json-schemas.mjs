@@ -83,6 +83,18 @@ const blocklistMetadataWithCredentialUrl = clone(blocklistMetadata);
 blocklistMetadataWithCredentialUrl.sources[0].url = "https://user@lists.example/blocklist.txt";
 expectInvalid("blocklist credential URL", blocklistMetadataSchema, blocklistMetadataWithCredentialUrl);
 
+const blocklistMetadataExternalOnly = clone(blocklistMetadata);
+blocklistMetadataExternalOnly.sources[0].redistribution = "external_fetch_only";
+expectValid("external-fetch-only blocklist metadata", blocklistMetadataSchema, blocklistMetadataExternalOnly);
+
+const blocklistMetadataWithoutLicense = clone(blocklistMetadata);
+delete blocklistMetadataWithoutLicense.sources[0].license;
+expectInvalid("blocklist metadata without license", blocklistMetadataSchema, blocklistMetadataWithoutLicense);
+
+const blocklistMetadataWithCredentialLicenseUrl = clone(blocklistMetadata);
+blocklistMetadataWithCredentialLicenseUrl.sources[0].license_url = "https://user@lists.example/license";
+expectInvalid("blocklist credential license URL", blocklistMetadataSchema, blocklistMetadataWithCredentialLicenseUrl);
+
 const burnAuditSchema = compile("schemas/burn-audit.schema.json");
 const burnAudit = readJson("tests/fixtures/burn-audit-pass.json");
 expectValid("passing burn audit", burnAuditSchema, burnAudit);

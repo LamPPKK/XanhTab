@@ -24,11 +24,13 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-targets --locked
+      - run: cargo build --locked --bins
       - run: cargo run --locked --quiet --bin xanhtabd -- --config config/xanhtab.toml --check-config
       - run: cargo run --locked --quiet --bin xanhtabd -- --config config/xanhtab.production.toml --check-config
       - run: bash -n install.sh scripts/*.sh
       - run: scripts/test-release-manifest.sh
       - run: scripts/test-public-config.sh
+      - run: scripts/test-blocklist-release.sh
       - run: scripts/test-x0-preflight.sh
       - run: scripts/test-x0-encoder-probe.sh
       - run: (cd benchmarks/x0-encoder-2026-08-20 && sha256sum -c SHA256SUMS)

@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fs::File,
+    fs::{self, File},
     io::{BufRead, BufReader},
     path::Path,
     sync::{
@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fst::{Set, SetBuilder};
+use fst::{Set, SetBuilder, Streamer};
 use memmap2::{Mmap, MmapOptions};
 
 #[derive(Clone, Default)]
@@ -22,14 +22,20 @@ pub struct Blocklist {
 impl Blocklist {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if !path.exists() {
-            return Ok(Self::default());
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect blocklist {}", path.display()));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!("blocklist must be a regular non-symlink file");
         }
-        let file = File::open(path)
-            .with_context(|| format!("failed to open blocklist {}", path.display()))?;
-        // SAFETY: the map is read-only, and production updates replace the file atomically.
-        let mmap = unsafe { MmapOptions::new().map(&file) }?;
-        let set = Set::new(mmap).context("invalid FST blocklist")?;
+        let set = open_fst(path)?;
         Ok(Self {
             set: Some(Arc::new(set)),
             hits: Arc::new(AtomicU64::new(0)),
@@ -62,6 +68,11 @@ impl Blocklist {
     }
 }
 
+pub fn validate_fst_file(path: impl AsRef<Path>) -> Result<usize> {
+    let set = open_fst(path.as_ref())?;
+    Ok(set.len())
+}
+
 pub fn compile_hosts(inputs: &[impl AsRef<Path>], output: impl AsRef<Path>) -> Result<usize> {
     let mut domains = BTreeSet::new();
     for input in inputs {
@@ -89,6 +100,55 @@ pub fn compile_hosts(inputs: &[impl AsRef<Path>], output: impl AsRef<Path>) -> R
     builder.finish()?;
     std::fs::rename(temporary, output.as_ref())?;
     Ok(domains.len())
+}
+
+pub fn merge_hosts_with_base(
+    base_fst: impl AsRef<Path>,
+    inputs: &[impl AsRef<Path>],
+    output: impl AsRef<Path>,
+) -> Result<usize> {
+    let base_fst = base_fst.as_ref();
+    let output = output.as_ref();
+    let base = open_fst(base_fst)
+        .with_context(|| format!("invalid base blocklist {}", base_fst.display()))?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let custom_fst = output.with_extension("custom.fst.tmp");
+    let merged_fst = output.with_extension("fst.tmp");
+    let result = (|| -> Result<usize> {
+        compile_hosts(inputs, &custom_fst)?;
+        let custom = open_fst(&custom_fst)?;
+        let mut union = base.op().add(&custom).union();
+        let mut builder = SetBuilder::new(File::create(&merged_fst)?)?;
+        let mut count = 0usize;
+        while let Some(domain) = union.next() {
+            builder.insert(domain)?;
+            count += 1;
+        }
+        builder.finish()?;
+        fs::rename(&merged_fst, output)?;
+        Ok(count)
+    })();
+    let _ = fs::remove_file(&custom_fst);
+    if result.is_err() {
+        let _ = fs::remove_file(&merged_fst);
+    }
+    result
+}
+
+fn open_fst(path: &Path) -> Result<Set<Mmap>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect blocklist {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("blocklist must be a regular non-symlink file");
+    }
+    let file =
+        File::open(path).with_context(|| format!("failed to open blocklist {}", path.display()))?;
+    // SAFETY: the map is read-only, and production updates replace the file atomically.
+    let mmap = unsafe { MmapOptions::new().map(&file) }?;
+    Set::new(mmap).context("invalid FST blocklist")
 }
 
 pub fn validate_hosts_file(path: impl AsRef<Path>) -> Result<usize> {
@@ -225,5 +285,42 @@ mod tests {
         writeln!(source, "0.0.0.0 ads.example.com cdn.example.net # aliases").unwrap();
         writeln!(source, "pixel.example.org.").unwrap();
         assert_eq!(validate_hosts_file(source.path()).unwrap(), 3);
+    }
+
+    #[test]
+    fn streaming_union_merges_base_and_custom_without_duplicates() {
+        let root = tempfile::tempdir().unwrap();
+        let base_source = root.path().join("base-hosts.txt");
+        let custom_source = root.path().join("custom-hosts.txt");
+        let base_fst = root.path().join("base.fst");
+        let merged_fst = root.path().join("merged.fst");
+        std::fs::write(
+            &base_source,
+            "0.0.0.0 ads.example.com\n0.0.0.0 tracker.example.net\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &custom_source,
+            "0.0.0.0 tracker.example.net custom.example.org\n",
+        )
+        .unwrap();
+        compile_hosts(&[base_source], &base_fst).unwrap();
+
+        assert_eq!(
+            merge_hosts_with_base(&base_fst, &[custom_source], &merged_fst).unwrap(),
+            3
+        );
+        assert_eq!(validate_fst_file(&merged_fst).unwrap(), 3);
+        let merged = Blocklist::open(&merged_fst).unwrap();
+        assert!(merged.contains("pixel.ads.example.com"));
+        assert!(merged.contains("tracker.example.net"));
+        assert!(merged.contains("custom.example.org"));
+    }
+
+    #[test]
+    fn fst_validation_rejects_malformed_input() {
+        let source = NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"not-an-fst").unwrap();
+        assert!(validate_fst_file(source.path()).is_err());
     }
 }

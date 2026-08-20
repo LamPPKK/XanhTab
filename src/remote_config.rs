@@ -58,9 +58,20 @@ struct BlocklistMetadataDocument {
 #[serde(deny_unknown_fields)]
 struct BlocklistSource {
     name: String,
+    file: String,
     url: Url,
     revision: String,
     sha256: String,
+    license: String,
+    license_url: Url,
+    redistribution: RedistributionStatus,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RedistributionStatus {
+    Reviewed,
+    ExternalFetchOnly,
 }
 
 pub fn validate_public_config_dir(directory: impl AsRef<Path>) -> Result<()> {
@@ -206,6 +217,7 @@ fn validate_blocklist_metadata(file: File) -> Result<()> {
         bail!("blocklist metadata must contain between 1 and {MAX_BLOCKLIST_SOURCES} sources");
     }
     let mut names = HashSet::with_capacity(document.sources.len());
+    let mut files = HashSet::with_capacity(document.sources.len());
     for source in document.sources {
         if source.name.is_empty()
             || source.name.chars().count() > 128
@@ -221,6 +233,21 @@ fn validate_blocklist_metadata(file: File) -> Result<()> {
             || !names.insert(source.name.clone())
         {
             bail!("blocklist source names must be non-empty, bounded, and unique");
+        }
+        if source.file.is_empty()
+            || source.file.len() > 128
+            || !source
+                .file
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !source
+                .file
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            || !files.insert(source.file.clone())
+        {
+            bail!("blocklist source filenames must be safe, bounded, and unique");
         }
         if source.url.scheme() != "https"
             || source.url.host_str().is_none()
@@ -251,6 +278,25 @@ fn validate_blocklist_metadata(file: File) -> Result<()> {
         {
             bail!("blocklist source checksum must be lowercase SHA-256");
         }
+        if source.license.is_empty()
+            || source.license.len() > 128
+            || source.license.starts_with(' ')
+            || source.license.ends_with(' ')
+            || !source
+                .license
+                .bytes()
+                .all(|byte| byte == b' ' || byte.is_ascii_graphic())
+        {
+            bail!("blocklist source license identifier is invalid");
+        }
+        if source.license_url.scheme() != "https"
+            || source.license_url.host_str().is_none()
+            || !source.license_url.username().is_empty()
+            || source.license_url.password().is_some()
+        {
+            bail!("blocklist source license URL must be credential-free HTTPS");
+        }
+        let _redistribution = source.redistribution;
     }
     Ok(())
 }
