@@ -3,6 +3,7 @@ Description=XanhTab isolated WPE and GStreamer browser tree
 Documentation=https://github.com/LamPPKK/XanhTab
 After=network-online.target xanhtab-netd.service
 Wants=network-online.target xanhtab-netd.service
+BindsTo=xanhtab-netd.service
 
 [Service]
 Type=simple
@@ -15,7 +16,7 @@ Environment=XANHTAB_PROXY_URL_FILE=/etc/xanhtab/secrets/proxy-url
 Environment=GST_PLUGIN_PATH_1_0=/usr/lib/xanhtab/gstreamer-1.0
 ExecStart=/usr/local/libexec/xanhtab-browser --socket /run/xanhtab/browser.sock --internal-home-file /usr/share/xanhtab/web/internal-home.html --signaling-host 127.0.0.1 --signaling-port 8444 --command-timeout-ms 1500
 ExecStopPost=/usr/bin/find /run/xanhtab-session -mindepth 1 -delete
-Restart=on-failure
+Restart=always
 RestartSec=2s
 TimeoutStopSec=5s
 KillMode=control-group

@@ -126,7 +126,7 @@
     "network": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "initial_mode", "netd_socket", "browser_uid", "tor_proxy", "warp_proxy", "wireguard_config", "proxy_url_file", "proxy_endpoint"],
+      "required": ["enabled", "initial_mode", "netd_socket", "ipc_timeout_seconds", "browser_uid", "tor_proxy", "warp_proxy", "wireguard_config", "proxy_url_file", "proxy_endpoint"],
       "properties": {
         "enabled": { "type": "boolean" },
         "initial_mode": { "enum": ["direct", "tor", "warp", "wireguard", "proxy"] },
@@ -134,11 +134,11 @@
         "ipc_timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
         "control_uid": { "type": "integer", "minimum": 1 },
         "browser_uid": { "type": "integer", "minimum": 1 },
-        "tor_proxy": { "type": "string" },
-        "warp_proxy": { "type": "string" },
-        "wireguard_config": { "type": "string" },
-        "proxy_url_file": { "type": "string" },
-        "proxy_endpoint": { "type": "string", "pattern": "^[^:]+:[0-9]+$" }
+        "tor_proxy": { "type": "string", "pattern": "^socks5h?://(127\\.0\\.0\\.1|\\[::1\\]):[0-9]+/?$" },
+        "warp_proxy": { "type": "string", "pattern": "^socks5h?://(127\\.0\\.0\\.1|\\[::1\\]):[0-9]+/?$" },
+        "wireguard_config": { "type": "string", "pattern": "^/.*/wg0\\.conf$" },
+        "proxy_url_file": { "type": "string", "pattern": "^/" },
+        "proxy_endpoint": { "type": "string", "pattern": "^((([0-9]{1,3}\\.){3}[0-9]{1,3})|\\[[0-9A-Fa-f:]+\\]):[0-9]+$" }
       }
     },
     "blocklist": {

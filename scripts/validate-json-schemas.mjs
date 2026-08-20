@@ -59,6 +59,14 @@ const productionConfigWithoutTlsKey = clone(productionConfig);
 delete productionConfigWithoutTlsKey.server.tls_key;
 expectInvalid("production config without TLS key", configSchema, productionConfigWithoutTlsKey);
 
+const configWithRemoteManagedProxy = clone(productionConfig);
+configWithRemoteManagedProxy.network.warp_proxy = "socks5h://192.0.2.1:40000";
+expectInvalid("managed proxy outside loopback", configSchema, configWithRemoteManagedProxy);
+
+const configWithUnsafeWireGuardName = clone(productionConfig);
+configWithUnsafeWireGuardName.network.wireguard_config = "/etc/xanhtab/secrets/home.conf";
+expectInvalid("WireGuard interface outside dedicated wg0", configSchema, configWithUnsafeWireGuardName);
+
 const remoteConfigSchema = compile("schemas/remote-config.schema.json");
 const remoteConfig = readJson("tests/fixtures/remote-config/config.json");
 expectValid("Git-backed public config", remoteConfigSchema, remoteConfig);

@@ -6,7 +6,7 @@
 
 - `xanhtabd` owns HTTP/TLS, zero-account pairing, session state, metrics, and event delivery. It is unprivileged.
 - `xanhtab-browser` owns one WPE WebView, its WebKit child processes, and the GStreamer stream tree. It runs as UID 988 in a separate cgroup.
-- `xanhtab-netd` is the only privileged component. It accepts the versioned `EgressCommand` enum over a Unix socket and invokes allowlisted executables without a shell.
+- `xanhtab-netd` is the only privileged component. It accepts the versioned `EgressCommand` enum over a Unix socket and invokes fixed absolute executable paths with fixed argument shapes; it never constructs a shell command. The only script entry point is the packaged `wg-quick`, which receives a root-owned config only after netd rejects executable hooks and other unsafe directives.
 - Sensitive browsing state belongs under `/run/xanhtab-session`. Non-secret configuration and compiled blocklists may remain on disk.
 
 Git-backed public configuration is a separate untrusted-input boundary even when fetched from an immutable ref. The installer reads only `config.json`, `custom_hosts.txt`, `bookmarks.json`, and `blocklist-metadata.json`; each must be a regular non-symlink file covered by the repository checksum list and the one-mebibyte limit. The signed staged daemon validates the versioned JSON contracts and strict ASCII hostnames before package or product-file mutation. On a fresh install, `config.json` may alter only the initial URL, stream profile, and auto-burn interval; it cannot alter TLS, service paths, UIDs, egress, or secret references. Bookmarks and provenance metadata remain non-secret disk state and are not browsing history. Remote metadata cannot select or replace the runtime base FST.
@@ -25,11 +25,13 @@ Event and WebRTC signaling connections use purpose-bound, one-time, short-lived 
 
 ## Session state
 
-The state machine is `idle → starting → active → burning → idle`; an observable `failed` state records redacted lifecycle failures. Only the paired client can hold the controller lease. A successful burn:
+The state machine is `idle → starting → active → burning → idle`; an observable `failed` state records redacted lifecycle failures. Only the paired client can hold the controller lease.
 
-Browser and network helper IPC wraps connect, write, and response read in separately configured finite deadlines. Production defaults both to two seconds so an accepted Unix-socket connection that never replies cannot hold the serialized lifecycle indefinitely. Each helper also keeps an internal deadline below the client deadline: browser commands reset the pipeline after 1.5 seconds by default, while netd serializes mutations, reserves 250 ms for its response, and kills a spawned policy command if execution is cancelled. A failed session start queues browser stop, egress reset, and tmpfs cleanup before entering `failed`. The client limits remain tunable from one to thirty seconds for hardware diagnosis; the device-side audit, rather than the configuration value alone, decides whether the five-second Burn SLO passes.
+Browser and network helper IPC wraps connect, write, and response read in separately configured finite deadlines. Production keeps browser IPC at two seconds and gives network transitions ten seconds for bounded WireGuard setup and proxy readiness. Each helper keeps an internal deadline below the client deadline: browser commands reset the pipeline after 1.5 seconds by default, while netd serializes mutations, reserves 250 ms for its response, and kills a spawned policy command if execution is cancelled. A failed session start queues browser stop, egress reset, and tmpfs cleanup before entering `failed`. The client limits remain tunable from one to thirty seconds for hardware diagnosis; the device-side audit, rather than the configuration value alone, decides whether the five-second Burn SLO passes.
 
 On production Linux, netd reads immutable Unix peer credentials before parsing a command and accepts only the installer-pinned `xanhtab` control-plane UID. The distinct browser UID is rejected even though filesystem group permissions allow it to reach the shared runtime directory. Development may omit `control_uid` only while the real network backend is disabled; that fallback still rejects the configured browser UID.
+
+A successful burn:
 
 1. marks the session `burning` and closes event delivery;
 2. stops the complete browser/GStreamer cgroup;
@@ -50,7 +52,9 @@ The machine-readable definition is [`schemas/openapi-v1.yaml`](../schemas/openap
 
 ## Private service protocols
 
-Both Unix protocols are newline-delimited JSON with a required protocol enum. Browser commands are `start`, `navigate`, and `stop`. Net commands are `apply`, `reset`, and `status`. The privileged helper derives one complete nftables transaction from validated local configuration; it never accepts an executable name, raw nftables statement, route statement, or shell fragment from the daemon.
+Both Unix protocols are newline-delimited JSON with a required protocol enum. Browser commands are `start`, `navigate`, and `stop`. Net commands are `apply`, `reset`, and `status`. The privileged helper never accepts an executable name, raw nftables statement, route statement, proxy credential, or shell fragment from the daemon.
+
+Every net transition first commits an nftables rule that drops all output from the browser UID. Netd then tears down the reserved WireGuard interface/rules, validates and prepares the selected adapter, verifies that a proxy listener is reachable or that `wg0` is configured, and finally commits the selected allow policy. A failure leaves the state uncommitted, retries teardown, and restores the UID drop. `status` returns the last committed mode; it does not report Direct while the kill-switch-only state is active. WireGuard uses reserved table `51820` and priority `10000` for IPv4/IPv6 UID rules, while nftables still rejects any browser-UID packet not leaving via `wg0`. Proxy modes allow only the literal endpoint bound to the validated proxy URL and drop every other browser-UID route. Browser and control-plane units bind their lifecycle to netd so a privileged-helper failure cannot leave an orphan browser tree with an old allow policy.
 
 ## Compatibility
 

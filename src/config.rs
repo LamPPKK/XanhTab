@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{EgressMode, StreamProfile};
+use crate::{
+    egress::validate_proxy_url,
+    model::{EgressMode, StreamProfile},
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -332,6 +335,30 @@ impl Config {
         {
             bail!("proxy_endpoint must be an IP address and port");
         }
+        for (name, proxy) in [
+            ("tor_proxy", &self.network.tor_proxy),
+            ("warp_proxy", &self.network.warp_proxy),
+        ] {
+            let proxy = validate_proxy_url(proxy, false)
+                .with_context(|| format!("network.{name} is invalid"))?;
+            if !proxy.endpoint.ip().is_loopback() {
+                bail!("network.{name} must use a loopback endpoint");
+            }
+        }
+        if !is_normalized_absolute(&self.network.wireguard_config)
+            || !is_normalized_absolute(&self.network.proxy_url_file)
+        {
+            bail!("network secret references must be normalized absolute paths");
+        }
+        if self
+            .network
+            .wireguard_config
+            .file_stem()
+            .and_then(|name| name.to_str())
+            != Some("wg0")
+        {
+            bail!("network.wireguard_config must target the dedicated wg0 interface");
+        }
         let signaling_uri = self
             .signaling
             .upstream_uri
@@ -508,6 +535,25 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.server.tls_key = Some(PathBuf::from("/etc/xanhtab/server.key"));
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn managed_proxies_and_secret_paths_are_pinned() {
+        let mut config = Config::default();
+        config.network.warp_proxy = "socks5h://192.0.2.1:40000".into();
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.network.tor_proxy = "socks5h://user:pass@127.0.0.1:9050".into();
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.network.wireguard_config = PathBuf::from("/etc/xanhtab/secrets/private.conf");
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.network.proxy_url_file = PathBuf::from("proxy-url");
         assert!(config.validate().is_err());
     }
 }

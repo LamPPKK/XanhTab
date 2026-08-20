@@ -14,6 +14,7 @@ use url::Url;
 use uuid::Uuid;
 use xanhtab::{
     browser::{BrowserCommand, BrowserResponse},
+    egress::validate_proxy_url,
     model::{EgressMode, NavigationCommand, StreamProfile},
 };
 
@@ -258,11 +259,7 @@ fn proxy_for(mode: EgressMode) -> Result<Option<String>> {
                 .unwrap_or_else(|| PathBuf::from("/etc/xanhtab/secrets/proxy-url"));
             let value = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            let parsed = Url::parse(value.trim()).context("invalid proxy URL")?;
-            if !matches!(parsed.scheme(), "http" | "https" | "socks5" | "socks5h") {
-                bail!("unsupported proxy scheme")
-            }
-            Ok(Some(parsed.to_string()))
+            Ok(Some(validate_proxy_url(&value, true)?.url.to_string()))
         }
         _ => Ok(None),
     }

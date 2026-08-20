@@ -15,6 +15,7 @@ NETWORK="direct"
 SECRETS_FILE=""
 MANIFEST_URL="$DEFAULT_MANIFEST_URL"
 PUBLIC_KEY=""
+PROXY_ENDPOINT_OVERRIDE=""
 WORK_DIR=""
 BACKUP_DIR=""
 MUTATION_STARTED=0
@@ -134,11 +135,89 @@ validate_arguments() {
   fi
   if [[ -n "$SECRETS_FILE" ]]; then
     [[ -f "$SECRETS_FILE" ]] || die "secrets file not found"
+    [[ ! -L "$SECRETS_FILE" ]] || die "secrets file must not be a symbolic link"
+    (( $(wc -c < "$SECRETS_FILE") <= 1048576 )) || die "secrets file exceeds the 1 MiB limit"
     [[ "$(stat -c '%u' "$SECRETS_FILE")" == 0 ]] || die "secrets file must be owned by root"
     local mode
     mode="$(stat -c '%a' "$SECRETS_FILE")"
     (( (8#$mode & 8#077) == 0 )) || die "secrets file must not be group/world accessible"
   fi
+}
+
+prepare_and_validate_secrets() {
+  local prepared="$WORK_DIR/prepared-secrets"
+  local config_source="$WORK_DIR/release/config/xanhtab.production.toml"
+  if [[ "$REPAIR" == 1 && -f /etc/xanhtab/xanhtab.toml ]]; then
+    config_source=/etc/xanhtab/xanhtab.toml
+  fi
+  [[ ! -f "$WORK_DIR/effective-config.toml" ]] || config_source="$WORK_DIR/effective-config.toml"
+  install -d -m 0700 "$prepared"
+
+  if [[ "$REPAIR" == 1 && -d /etc/xanhtab/secrets ]]; then
+    local existing
+    for existing in wg0.conf proxy-url stun.json turn.json; do
+      [[ ! -L "/etc/xanhtab/secrets/$existing" ]] || die "installed secret $existing must not be a symbolic link"
+      if [[ -f "/etc/xanhtab/secrets/$existing" ]]; then
+        install -m 0600 "/etc/xanhtab/secrets/$existing" "$prepared/$existing"
+      fi
+    done
+  fi
+
+  if [[ -n "$SECRETS_FILE" ]]; then
+    jq -e 'type == "object" and (keys - ["proxy_url", "stun_config_base64", "turn_config_base64", "wireguard_config_base64"] | length == 0)' \
+      "$SECRETS_FILE" >/dev/null || die "secrets file must be an object containing only allowlisted keys"
+    umask 077
+    if jq -e 'has("wireguard_config_base64")' "$SECRETS_FILE" >/dev/null; then
+      jq -er '.wireguard_config_base64 | strings' "$SECRETS_FILE" \
+        | base64 --decode > "$prepared/wg0.conf" || die "wireguard_config_base64 is invalid"
+    fi
+    if jq -e 'has("proxy_url")' "$SECRETS_FILE" >/dev/null; then
+      jq -er '.proxy_url | strings' "$SECRETS_FILE" > "$prepared/proxy-url" \
+        || die "proxy_url must be a string"
+    fi
+    local ice_key ice_target
+    for ice_key in stun_config_base64 turn_config_base64; do
+      [[ "$ice_key" == "stun_config_base64" ]] && ice_target="stun.json" || ice_target="turn.json"
+      if jq -e --arg key "$ice_key" 'has($key)' "$SECRETS_FILE" >/dev/null; then
+        jq -er --arg key "$ice_key" '.[$key] | strings' "$SECRETS_FILE" \
+          | base64 --decode > "$prepared/$ice_target" || die "$ice_key is invalid"
+        jq -e 'type == "object"' "$prepared/$ice_target" >/dev/null \
+          || die "$ice_target must contain a JSON object"
+      fi
+    done
+  fi
+
+  if [[ "$DRY_RUN" == 1 && -f "$prepared/wg0.conf" ]]; then
+    log "would validate the WireGuard secret with the verified staged netd"
+  elif [[ -f "$prepared/wg0.conf" ]]; then
+    "$WORK_DIR/release/libexec/xanhtab-netd" \
+      --config "$config_source" \
+      --check-wireguard-config "$prepared/wg0.conf" \
+      || die "WireGuard secret failed the no-hooks/full-tunnel policy"
+  fi
+  if [[ "$DRY_RUN" == 1 && -f "$prepared/proxy-url" ]]; then
+    log "would validate the proxy secret and derive its credential-free endpoint with the verified staged netd"
+  elif [[ -f "$prepared/proxy-url" ]]; then
+    local proxy_endpoint
+    proxy_endpoint="$("$WORK_DIR/release/libexec/xanhtab-netd" \
+      --config "$config_source" \
+      --check-proxy-url "$prepared/proxy-url" \
+      --print-proxy-endpoint)" || die "proxy URL secret is invalid"
+    [[ "$proxy_endpoint" =~ ^(\[[0-9A-Fa-f:]+\]|([0-9]{1,3}\.){3}[0-9]{1,3}):[0-9]+$ ]] \
+      || die "proxy validator returned an invalid endpoint"
+    PROXY_ENDPOINT_OVERRIDE="$proxy_endpoint"
+    if [[ "$config_source" != "$WORK_DIR/effective-config.toml" ]]; then
+      install -m 0600 "$config_source" "$WORK_DIR/effective-config.toml"
+      config_source="$WORK_DIR/effective-config.toml"
+    fi
+    sed -i "s|^proxy_endpoint = .*|proxy_endpoint = \"$proxy_endpoint\"|" "$config_source"
+    "$WORK_DIR/release/bin/xanhtabd" --config "$config_source" --check-config
+  fi
+
+  [[ "$NETWORK" != wireguard || -f "$prepared/wg0.conf" ]] \
+    || die "--network wireguard requires wireguard_config_base64 or a preserved repair secret"
+  [[ "$NETWORK" != proxy || -f "$prepared/proxy-url" ]] \
+    || die "--network proxy requires proxy_url or a preserved repair secret"
 }
 
 preflight() {
@@ -161,7 +240,7 @@ preflight() {
   [[ -n "$PUBLIC_KEY" && -f "$PUBLIC_KEY" ]] || die "--public-key is required; obtain and verify it out-of-band"
   command -v apt-get >/dev/null || die "apt-get is unavailable"
   local tool
-  for tool in curl jq minisign sha256sum tar zstd file find; do
+  for tool in base64 curl jq minisign sha256sum tar zstd file find; do
     command -v "$tool" >/dev/null || die "$tool is required before any system mutation"
   done
   if [[ -n "$CONFIG_REPO" ]]; then
@@ -172,7 +251,7 @@ preflight() {
 install_system_dependencies() {
   local packages=(
     ca-certificates curl jq git minisign zstd qrencode openssl avahi-daemon
-    nftables wireguard-tools tor
+    iproute2 nftables wireguard-tools tor
     libwpewebkit-2.0-1 gstreamer1.0-wpe gstreamer1.0-tools
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
   )
@@ -361,37 +440,20 @@ sync_public_config() {
 }
 
 install_secrets() {
-  [[ -n "$SECRETS_FILE" ]] || return 0
-  jq -e 'keys - ["proxy_url", "stun_config_base64", "turn_config_base64", "wireguard_config_base64"] | length == 0' "$SECRETS_FILE" >/dev/null || die "unknown key in secrets file"
+  local prepared="$WORK_DIR/prepared-secrets"
+  [[ -d "$prepared" ]] || return 0
   run install -d -o root -g xanhtab -m 0750 /etc/xanhtab/secrets
   if [[ "$DRY_RUN" == 1 ]]; then
-    log "would install selected secret values without printing them"
+    log "would install validated secret values without printing them"
     return
   fi
-  umask 077
-  if jq -e 'has("wireguard_config_base64")' "$SECRETS_FILE" >/dev/null; then
-    jq -er '.wireguard_config_base64' "$SECRETS_FILE" | base64 --decode > /etc/xanhtab/secrets/wg0.conf
+  if [[ -f "$prepared/wg0.conf" ]]; then
+    install -o root -g root -m 0600 "$prepared/wg0.conf" /etc/xanhtab/secrets/wg0.conf
   fi
-  if jq -e 'has("proxy_url")' "$SECRETS_FILE" >/dev/null; then
-    jq -er '.proxy_url | select(test("^(https?|socks5h?)://"))' "$SECRETS_FILE" > /etc/xanhtab/secrets/proxy-url
-  fi
-  local ice_key ice_target
-  for ice_key in stun_config_base64 turn_config_base64; do
-    [[ "$ice_key" == "stun_config_base64" ]] && ice_target="stun.json" || ice_target="turn.json"
-    if jq -e --arg key "$ice_key" 'has($key)' "$SECRETS_FILE" >/dev/null; then
-      jq -er --arg key "$ice_key" '.[$key]' "$SECRETS_FILE" | base64 --decode > "/etc/xanhtab/secrets/$ice_target"
-      jq -e 'type == "object"' "/etc/xanhtab/secrets/$ice_target" >/dev/null || die "$ice_target must contain a JSON object"
-    fi
-  done
-  if [[ -f /etc/xanhtab/secrets/wg0.conf ]]; then
-    chown root:root /etc/xanhtab/secrets/wg0.conf
-    chmod 0600 /etc/xanhtab/secrets/wg0.conf
-  fi
-  local secret_path
-  for secret_path in /etc/xanhtab/secrets/proxy-url /etc/xanhtab/secrets/stun.json /etc/xanhtab/secrets/turn.json; do
-    if [[ -f "$secret_path" ]]; then
-      chown root:xanhtab "$secret_path"
-      chmod 0640 "$secret_path"
+  local secret_name
+  for secret_name in proxy-url stun.json turn.json; do
+    if [[ -f "$prepared/$secret_name" ]]; then
+      install -o root -g xanhtab -m 0640 "$prepared/$secret_name" "/etc/xanhtab/secrets/$secret_name"
     fi
   done
 }
@@ -475,6 +537,9 @@ install_release() {
   run systemd-tmpfiles --create /usr/lib/tmpfiles.d/xanhtab.conf
   if [[ "$DRY_RUN" == 0 ]]; then
     sed -i "s/^initial_mode = .*/initial_mode = \"$NETWORK\"/" /etc/xanhtab/xanhtab.toml
+    if [[ -n "$PROXY_ENDPOINT_OVERRIDE" ]]; then
+      sed -i "s|^proxy_endpoint = .*|proxy_endpoint = \"$PROXY_ENDPOINT_OVERRIDE\"|" /etc/xanhtab/xanhtab.toml
+    fi
     ensure_tls
     /usr/local/libexec/xanhtab-blocklist \
       --base-fst "$release/config/base-blocklist.fst" \
@@ -616,6 +681,7 @@ main() {
   WORK_DIR="$(mktemp -d -t xanhtab-install.XXXXXXXX)"
   download_and_verify_release
   [[ "$DRY_RUN" == 1 ]] || sync_public_config
+  prepare_and_validate_secrets
   install_system_dependencies
   validate_runtime_abi
   install_release

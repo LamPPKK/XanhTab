@@ -3,6 +3,7 @@ pub mod auth;
 pub mod blocklist;
 pub mod browser;
 pub mod config;
+pub mod egress;
 pub mod error;
 pub mod events;
 pub mod metrics;

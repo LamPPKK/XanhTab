@@ -1,5 +1,6 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -10,6 +11,14 @@ use tokio::{
 };
 
 use crate::{config::NetworkConfig, error::AppError, model::EgressMode};
+
+pub const WIREGUARD_INTERFACE: &str = "wg0";
+pub const WIREGUARD_ROUTE_TABLE: &str = "51820";
+pub const WIREGUARD_RULE_PRIORITY: &str = "10000";
+pub const NFT_PROGRAM: &str = "/usr/sbin/nft";
+pub const IP_PROGRAM: &str = "/usr/sbin/ip";
+pub const WG_PROGRAM: &str = "/usr/bin/wg";
+pub const WG_QUICK_PROGRAM: &str = "/usr/bin/wg-quick";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EgressRequest {
@@ -141,46 +150,188 @@ impl EgressBackend for MockEgress {
     }
 }
 
-pub fn command_plan(config: &NetworkConfig, mode: EgressMode) -> Vec<CommandSpec> {
-    let mut plan = vec![CommandSpec {
-        program: "nft",
-        args: vec![
-            "add".into(),
-            "table".into(),
-            "inet".into(),
-            "xanhtab".into(),
-        ],
-        stdin: None,
-    }];
-    match mode {
-        EgressMode::Direct | EgressMode::Tor | EgressMode::Warp | EgressMode::Proxy => {}
-        EgressMode::WireGuard => {
-            plan.push(CommandSpec {
-                program: "wg-quick",
-                args: vec!["up".into(), config.wireguard_config.display().to_string()],
-                stdin: None,
-            });
-        }
-    }
-    plan.push(nft_transaction(config, mode));
-    plan
+pub fn kill_switch_plan(config: &NetworkConfig) -> Vec<CommandSpec> {
+    vec![
+        CommandSpec {
+            program: NFT_PROGRAM,
+            args: vec![
+                "add".into(),
+                "table".into(),
+                "inet".into(),
+                "xanhtab".into(),
+            ],
+            stdin: None,
+        },
+        nft_transaction(config, None, None),
+    ]
 }
 
-fn nft_transaction(config: &NetworkConfig, mode: EgressMode) -> CommandSpec {
+pub fn active_policy_plan(
+    config: &NetworkConfig,
+    mode: EgressMode,
+    proxy_endpoint: Option<SocketAddr>,
+) -> Result<Vec<CommandSpec>> {
+    if matches!(mode, EgressMode::Tor | EgressMode::Warp | EgressMode::Proxy)
+        && proxy_endpoint.is_none()
+    {
+        bail!("proxy egress requires a validated endpoint");
+    }
+    Ok(vec![nft_transaction(config, Some(mode), proxy_endpoint)])
+}
+
+pub fn wireguard_setup_plan(config: &NetworkConfig) -> Vec<CommandSpec> {
+    let uid_range = format!("{0}-{0}", config.browser_uid);
+    vec![
+        CommandSpec {
+            program: WG_QUICK_PROGRAM,
+            args: vec!["up".into(), config.wireguard_config.display().to_string()],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "route".into(),
+                "replace".into(),
+                "default".into(),
+                "dev".into(),
+                WIREGUARD_INTERFACE.into(),
+                "table".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "-6".into(),
+                "route".into(),
+                "replace".into(),
+                "default".into(),
+                "dev".into(),
+                WIREGUARD_INTERFACE.into(),
+                "table".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "rule".into(),
+                "add".into(),
+                "priority".into(),
+                WIREGUARD_RULE_PRIORITY.into(),
+                "uidrange".into(),
+                uid_range.clone(),
+                "lookup".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "-6".into(),
+                "rule".into(),
+                "add".into(),
+                "priority".into(),
+                WIREGUARD_RULE_PRIORITY.into(),
+                "uidrange".into(),
+                uid_range,
+                "lookup".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: WG_PROGRAM,
+            args: vec!["show".into(), WIREGUARD_INTERFACE.into()],
+            stdin: None,
+        },
+    ]
+}
+
+pub fn wireguard_teardown_plan(config: &NetworkConfig) -> Vec<CommandSpec> {
+    let uid_range = format!("{0}-{0}", config.browser_uid);
+    vec![
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "rule".into(),
+                "del".into(),
+                "priority".into(),
+                WIREGUARD_RULE_PRIORITY.into(),
+                "uidrange".into(),
+                uid_range.clone(),
+                "lookup".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "-6".into(),
+                "rule".into(),
+                "del".into(),
+                "priority".into(),
+                WIREGUARD_RULE_PRIORITY.into(),
+                "uidrange".into(),
+                uid_range,
+                "lookup".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "route".into(),
+                "flush".into(),
+                "table".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "-6".into(),
+                "route".into(),
+                "flush".into(),
+                "table".into(),
+                WIREGUARD_ROUTE_TABLE.into(),
+            ],
+            stdin: None,
+        },
+        CommandSpec {
+            program: IP_PROGRAM,
+            args: vec![
+                "link".into(),
+                "delete".into(),
+                "dev".into(),
+                WIREGUARD_INTERFACE.into(),
+            ],
+            stdin: None,
+        },
+    ]
+}
+
+fn nft_transaction(
+    config: &NetworkConfig,
+    mode: Option<EgressMode>,
+    proxy_endpoint: Option<SocketAddr>,
+) -> CommandSpec {
     let uid = config.browser_uid;
     let mut script = String::from(
         "flush table inet xanhtab\n\
          add chain inet xanhtab browser_output { type filter hook output priority filter; policy accept; }\n",
     );
     match mode {
-        EgressMode::Direct => {}
-        EgressMode::Tor => add_proxy_guard(&mut script, uid, "127.0.0.1", 9050),
-        EgressMode::Warp => add_proxy_guard(&mut script, uid, "127.0.0.1", 40000),
-        EgressMode::Proxy => {
-            let endpoint = config
-                .proxy_endpoint
-                .parse::<std::net::SocketAddr>()
-                .expect("validated proxy endpoint");
+        None => add_drop(&mut script, uid),
+        Some(EgressMode::Direct) => {}
+        Some(EgressMode::Tor | EgressMode::Warp | EgressMode::Proxy) => {
+            let endpoint = proxy_endpoint.expect("validated proxy policy endpoint");
             add_proxy_guard(
                 &mut script,
                 uid,
@@ -188,18 +339,38 @@ fn nft_transaction(config: &NetworkConfig, mode: EgressMode) -> CommandSpec {
                 endpoint.port(),
             );
         }
-        EgressMode::WireGuard => {
+        Some(EgressMode::WireGuard) => {
             script.push_str(&format!(
-                "add rule inet xanhtab browser_output meta skuid {uid} oifname \"wg0\" accept\n"
+                "add rule inet xanhtab browser_output meta skuid {uid} oifname \"{WIREGUARD_INTERFACE}\" accept\n"
             ));
             add_drop(&mut script, uid);
         }
     }
     CommandSpec {
-        program: "nft",
+        program: NFT_PROGRAM,
         args: vec!["-f".into(), "-".into()],
         stdin: Some(script),
     }
+}
+
+pub fn command_plan(config: &NetworkConfig, mode: EgressMode) -> Vec<CommandSpec> {
+    let endpoint = match mode {
+        EgressMode::Tor => Some("127.0.0.1:9050".parse().expect("valid endpoint")),
+        EgressMode::Warp => Some("127.0.0.1:40000".parse().expect("valid endpoint")),
+        EgressMode::Proxy => Some(
+            config
+                .proxy_endpoint
+                .parse()
+                .expect("validated proxy endpoint"),
+        ),
+        _ => None,
+    };
+    let mut plan = kill_switch_plan(config);
+    if mode == EgressMode::WireGuard {
+        plan.extend(wireguard_setup_plan(config));
+    }
+    plan.extend(active_policy_plan(config, mode, endpoint).expect("valid policy"));
+    plan
 }
 
 fn add_proxy_guard(script: &mut String, uid: u32, address: &str, port: u16) {
@@ -242,9 +413,11 @@ mod tests {
             EgressMode::Proxy,
         ] {
             for command in command_plan(&config, mode) {
-                assert!(["nft", "wg-quick"].contains(&command.program));
-                assert_ne!(command.program, "sh");
-                assert_ne!(command.program, "bash");
+                assert!(
+                    [NFT_PROGRAM, WG_QUICK_PROGRAM, WG_PROGRAM, IP_PROGRAM]
+                        .contains(&command.program)
+                );
+                assert!(command.program.starts_with('/'));
             }
         }
     }
@@ -252,15 +425,52 @@ mod tests {
     #[test]
     fn firewall_policy_is_one_nft_transaction() {
         let config = NetworkConfig::default();
-        let plan = command_plan(&config, EgressMode::Tor);
+        let plan = active_policy_plan(
+            &config,
+            EgressMode::Tor,
+            Some("127.0.0.1:9050".parse().unwrap()),
+        )
+        .unwrap();
         let nft = plan
             .iter()
-            .filter(|command| command.program == "nft" && command.stdin.is_some())
+            .filter(|command| command.program == NFT_PROGRAM && command.stdin.is_some())
             .collect::<Vec<_>>();
         assert_eq!(nft.len(), 1);
         let script = nft[0].stdin.as_ref().unwrap();
         assert!(script.contains("flush table inet xanhtab"));
         assert!(script.contains("tcp dport 9050 accept"));
+        assert!(script.contains("counter drop"));
+    }
+
+    #[test]
+    fn every_transition_can_start_with_a_uid_drop() {
+        let config = NetworkConfig::default();
+        let plan = kill_switch_plan(&config);
+        let script = plan.last().unwrap().stdin.as_ref().unwrap();
+        assert!(script.contains("meta skuid 988 counter drop"));
+    }
+
+    #[test]
+    fn wireguard_uses_a_dedicated_uid_policy_table() {
+        let config = NetworkConfig::default();
+        let plan = wireguard_setup_plan(&config);
+        assert!(plan.iter().any(|command| {
+            command.program == IP_PROGRAM
+                && command.args
+                    == [
+                        "rule",
+                        "add",
+                        "priority",
+                        WIREGUARD_RULE_PRIORITY,
+                        "uidrange",
+                        "988-988",
+                        "lookup",
+                        WIREGUARD_ROUTE_TABLE,
+                    ]
+        }));
+        let active = active_policy_plan(&config, EgressMode::WireGuard, None).unwrap();
+        let script = active[0].stdin.as_ref().unwrap();
+        assert!(script.contains("oifname \"wg0\" accept"));
         assert!(script.contains("counter drop"));
     }
 
@@ -273,7 +483,7 @@ mod tests {
         let plan = command_plan(&config, EgressMode::WireGuard);
         let command = plan
             .iter()
-            .find(|command| command.program == "wg-quick")
+            .find(|command| command.program == WG_QUICK_PROGRAM)
             .unwrap();
         assert_eq!(command.args[1], "/root/a config.conf");
     }

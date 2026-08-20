@@ -3,13 +3,14 @@ Description=XanhTab zero-account control plane
 Documentation=https://github.com/LamPPKK/XanhTab
 After=network-online.target xanhtab-browser.service xanhtab-netd.service
 Wants=network-online.target xanhtab-browser.service xanhtab-netd.service
+BindsTo=xanhtab-browser.service xanhtab-netd.service
 
 [Service]
 Type=simple
 User=xanhtab
 Group=xanhtab
 ExecStart=/usr/local/bin/xanhtabd --config /etc/xanhtab/xanhtab.toml
-Restart=on-failure
+Restart=always
 RestartSec=2s
 UMask=0077
 NoNewPrivileges=yes
