@@ -148,6 +148,14 @@ preflight() {
   [[ "$(uname -m)" == "aarch64" ]] || die "only aarch64 is supported"
   [[ -r /proc/device-tree/model ]] || die "Raspberry Pi model information is unavailable"
   grep -aq "Raspberry Pi Zero 2 W" /proc/device-tree/model || die "only Raspberry Pi Zero 2 W is supported"
+  [[ -r /proc/cmdline ]] || die "kernel command line is unavailable"
+  if grep -Eq '(^|[[:space:]])cgroup_disable=memory($|[[:space:]])' /proc/cmdline; then
+    die "memory cgroup is disabled by the kernel command line; remove cgroup_disable=memory and reboot before installing"
+  fi
+  [[ -r /sys/fs/cgroup/cgroup.controllers ]] || die "cgroup v2 controllers are unavailable"
+  if ! grep -qw memory /sys/fs/cgroup/cgroup.controllers; then
+    die "cgroup v2 memory controller is unavailable; service memory ceilings cannot be enforced"
+  fi
   [[ -n "$PUBLIC_KEY" && -f "$PUBLIC_KEY" ]] || die "--public-key is required; obtain and verify it out-of-band"
   command -v apt-get >/dev/null || die "apt-get is unavailable"
   local tool

@@ -42,6 +42,12 @@ done
 
 [[ "$(uname -m)" == "aarch64" ]] || die "X0 must run on aarch64 hardware"
 grep -aq "Raspberry Pi Zero 2 W" /proc/device-tree/model 2>/dev/null || die "X0 must run on a real Raspberry Pi Zero 2 W"
+[[ -r /proc/cmdline ]] || die "kernel command line is unavailable"
+if grep -Eq '(^|[[:space:]])cgroup_disable=memory($|[[:space:]])' /proc/cmdline; then
+  die "memory cgroup is disabled by the kernel command line"
+fi
+[[ -r /sys/fs/cgroup/cgroup.controllers ]] || die "cgroup v2 controllers are unavailable"
+grep -qw memory /sys/fs/cgroup/cgroup.controllers || die "cgroup v2 memory controller is unavailable"
 for element in wpesrc v4l2h264enc h264parse webrtcsink opusenc; do
   gst-inspect-1.0 "$element" >/dev/null || die "missing GStreamer element: $element"
 done
@@ -52,6 +58,7 @@ if [[ -z "$OUTPUT" ]]; then
   OUTPUT=".x0-results/$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 mkdir -p "$OUTPUT/logs"
+scripts/x0-preflight-json.sh > "$OUTPUT/preflight.json"
 
 cat > "$OUTPUT/environment.txt" <<EOF
 started_at=$(date -u +%FT%TZ)

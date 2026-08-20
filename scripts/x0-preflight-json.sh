@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+readonly PROC_CMDLINE_PATH="${XANHTAB_PROC_CMDLINE_PATH:-/proc/cmdline}"
+readonly CGROUP_CONTROLLERS_PATH="${XANHTAB_CGROUP_CONTROLLERS_PATH:-/sys/fs/cgroup/cgroup.controllers}"
+
 json_string() {
   local value="${1//\\/\\\\}"
   value="${value//\"/\\\"}"
@@ -51,6 +54,19 @@ rswebrtc_version="unavailable"
 if command -v gst-inspect-1.0 >/dev/null 2>&1 && gst-inspect-1.0 webrtcsink >/dev/null 2>&1; then
   rswebrtc_version="$(gst-inspect-1.0 webrtcsink 2>/dev/null | awk -F: '/^[[:space:]]+Version[[:space:]]*:/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
 fi
+cgroup_version="unavailable"
+memory_controller=false
+cmdline_memory_disabled=false
+if [[ -r "$PROC_CMDLINE_PATH" ]] \
+  && grep -Eq '(^|[[:space:]])cgroup_disable=memory($|[[:space:]])' "$PROC_CMDLINE_PATH"; then
+  cmdline_memory_disabled=true
+fi
+if [[ -r "$CGROUP_CONTROLLERS_PATH" ]]; then
+  cgroup_version="v2"
+  if grep -qw memory "$CGROUP_CONTROLLERS_PATH"; then
+    memory_controller=true
+  fi
+fi
 
 printf '{\n'
 printf '  "schema_version": 1,\n'
@@ -58,6 +74,7 @@ printf '  "captured_at": '; json_string "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf
 printf '  "os": {"id": '; json_string "$os_id"; printf ', "codename": '; json_string "$os_codename"; printf '},\n'
 printf '  "hardware": {"model": '; json_string "$model"; printf ', "architecture": '; json_string "$architecture"; printf ', "kernel": '; json_string "$kernel"; printf ', "firmware": '; json_string "$firmware"; printf ', "cma_kib": %s},\n' "$cma_kib"
 printf '  "devices": {"encoder_video11": %s, "render_node": %s},\n' "$([[ -e /dev/video11 ]] && printf true || printf false)" "$([[ -e /dev/dri/renderD128 ]] && printf true || printf false)"
+printf '  "cgroups": {"version": '; json_string "$cgroup_version"; printf ', "memory_controller": %s, "cmdline_memory_disabled": %s},\n' "$memory_controller" "$cmdline_memory_disabled"
 printf '  "gstreamer": {"version": '; json_string "$gstreamer"; printf ', "plugin_abi": "1.0", "rswebrtc_version": '; json_string "$rswebrtc_version"; printf ', "elements": {'
 printf '"wpesrc": %s, "webrtcsink": %s, "v4l2h264enc": %s, "h264parse": %s, "opusenc": %s' \
   "$(gst_element wpesrc)" "$(gst_element webrtcsink)" "$(gst_element v4l2h264enc)" "$(gst_element h264parse)" "$(gst_element opusenc)"
