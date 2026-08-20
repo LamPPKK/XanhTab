@@ -8,6 +8,7 @@ pub mod events;
 pub mod metrics;
 pub mod model;
 pub mod netd;
+pub mod remote_config;
 pub mod session;
 
 use std::sync::Arc;

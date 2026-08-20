@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use fst::{Set, SetBuilder};
 use memmap2::{Mmap, MmapOptions};
 
@@ -73,7 +73,7 @@ pub fn compile_hosts(inputs: &[impl AsRef<Path>], output: impl AsRef<Path>) -> R
             File::open(input).with_context(|| format!("failed to read {}", input.display()))?,
         );
         for line in reader.lines() {
-            if let Some(domain) = parse_hosts_line(&line?) {
+            for domain in parse_hosts_line(&line?) {
                 domains.insert(domain);
             }
         }
@@ -91,26 +91,98 @@ pub fn compile_hosts(inputs: &[impl AsRef<Path>], output: impl AsRef<Path>) -> R
     Ok(domains.len())
 }
 
-fn parse_hosts_line(line: &str) -> Option<String> {
-    let content = line.split('#').next()?.trim();
+pub fn validate_hosts_file(path: impl AsRef<Path>) -> Result<usize> {
+    let path = path.as_ref();
+    let reader = BufReader::new(
+        File::open(path).with_context(|| format!("failed to read {}", path.display()))?,
+    );
+    let mut domains = BTreeSet::new();
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        let content = line.split('#').next().unwrap_or_default().trim();
+        if content.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        let candidates = if parts
+            .first()
+            .is_some_and(|part| part.parse::<std::net::IpAddr>().is_ok())
+        {
+            &parts[1..]
+        } else {
+            &parts[..]
+        };
+        if candidates.is_empty() {
+            bail!(
+                "{}:{} does not contain a hostname",
+                path.display(),
+                index + 1
+            );
+        }
+        for candidate in candidates {
+            let Some(domain) = normalize_domain(candidate) else {
+                bail!(
+                    "{}:{} contains an invalid hostname",
+                    path.display(),
+                    index + 1
+                );
+            };
+            domains.insert(domain);
+        }
+    }
+    Ok(domains.len())
+}
+
+fn parse_hosts_line(line: &str) -> Vec<String> {
+    let content = line.split('#').next().unwrap_or_default().trim();
     if content.is_empty() {
-        return None;
+        return Vec::new();
     }
     let parts: Vec<&str> = content.split_whitespace().collect();
-    let candidate = if parts.len() > 1 && parts[0].parse::<std::net::IpAddr>().is_ok() {
-        parts[1]
+    let candidates = if parts
+        .first()
+        .is_some_and(|part| part.parse::<std::net::IpAddr>().is_ok())
+    {
+        &parts[1..]
     } else {
-        parts[0]
+        &parts[..]
     };
-    let host = normalize_host(candidate);
-    if host.is_empty() || host == "localhost" || !host.contains('.') {
-        return None;
-    }
-    Some(host)
+    candidates
+        .iter()
+        .filter_map(|candidate| normalize_domain(candidate))
+        .collect()
 }
 
 fn normalize_host(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn normalize_domain(candidate: &str) -> Option<String> {
+    let host = normalize_host(candidate);
+    if host.is_empty()
+        || host == "localhost"
+        || !host.contains('.')
+        || host.len() > 253
+        || host.parse::<std::net::IpAddr>().is_ok()
+    {
+        return None;
+    }
+    let valid = host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    });
+    valid.then_some(host)
 }
 
 #[cfg(test)]
@@ -124,7 +196,7 @@ mod tests {
     #[test]
     fn compiles_hosts_and_matches_subdomains() {
         let mut source = NamedTempFile::new().unwrap();
-        writeln!(source, "0.0.0.0 ads.example.com").unwrap();
+        writeln!(source, "0.0.0.0 ads.example.com cdn.example.com").unwrap();
         writeln!(source, "tracker.example.net # comment").unwrap();
         writeln!(source, "localhost").unwrap();
         let output = NamedTempFile::new().unwrap();
@@ -133,7 +205,25 @@ mod tests {
         assert!(list.contains("pixel.ads.example.com"));
         assert!(list.contains("tracker.example.net"));
         assert!(!list.contains("example.org"));
-        assert_eq!(list.len(), 2);
-        assert_eq!(list.hits(), 2);
+        assert!(list.contains("cdn.example.com"));
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.hits(), 3);
+    }
+
+    #[test]
+    fn strict_hosts_validation_rejects_non_domains() {
+        let mut source = NamedTempFile::new().unwrap();
+        writeln!(source, "0.0.0.0 ads.example.com").unwrap();
+        writeln!(source, "../etc/passwd").unwrap();
+        assert!(validate_hosts_file(source.path()).is_err());
+    }
+
+    #[test]
+    fn strict_hosts_validation_accepts_comments_and_aliases() {
+        let mut source = NamedTempFile::new().unwrap();
+        writeln!(source, "# local additions").unwrap();
+        writeln!(source, "0.0.0.0 ads.example.com cdn.example.net # aliases").unwrap();
+        writeln!(source, "pixel.example.org.").unwrap();
+        assert_eq!(validate_hosts_file(source.path()).unwrap(), 3);
     }
 }

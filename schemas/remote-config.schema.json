@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fireball.example/schemas/xanhtab-remote-config-v1.json",
+  "title": "XanhTab Git-backed public configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "session"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "initial_url": {
+          "type": "string",
+          "format": "uri",
+          "anyOf": [
+            { "const": "xanhtab://home" },
+            { "pattern": "^https?://[^/?#@]+(?:/|$)" }
+          ]
+        },
+        "initial_profile": { "enum": ["1080p30", "720p15", "480p10"] },
+        "auto_burn_seconds": {
+          "type": "integer",
+          "anyOf": [
+            { "const": 0 },
+            { "minimum": 60, "maximum": 86400 }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "bookmarks": [
+    {
+      "id": "5dbcd6bc-2531-44d5-a2b8-cc9dfbb2d28b",
+      "title": "Example",
+      "url": "https://example.com/"
+    },
+    {
+      "id": "71b9ed83-fe38-40be-9446-7f7cbe223f6e",
+      "title": "WPE WebKit",
+      "url": "https://wpewebkit.org/"
+    }
+  ]
+}

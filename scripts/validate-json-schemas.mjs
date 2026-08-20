@@ -59,6 +59,30 @@ const productionConfigWithoutTlsKey = clone(productionConfig);
 delete productionConfigWithoutTlsKey.server.tls_key;
 expectInvalid("production config without TLS key", configSchema, productionConfigWithoutTlsKey);
 
+const remoteConfigSchema = compile("schemas/remote-config.schema.json");
+const remoteConfig = readJson("tests/fixtures/remote-config/config.json");
+expectValid("Git-backed public config", remoteConfigSchema, remoteConfig);
+
+const remoteConfigWithSecret = clone(remoteConfig);
+remoteConfigWithSecret.proxy_password = "must-not-be-public";
+expectInvalid("public config secret field", remoteConfigSchema, remoteConfigWithSecret);
+
+const bookmarksSchema = compile("schemas/bookmarks.schema.json");
+const bookmarks = readJson("tests/fixtures/remote-config/bookmarks.json");
+expectValid("Git-backed bookmarks", bookmarksSchema, bookmarks);
+
+const bookmarksWithScriptUrl = clone(bookmarks);
+bookmarksWithScriptUrl.bookmarks[0].url = "javascript:alert(1)";
+expectInvalid("bookmark script URL", bookmarksSchema, bookmarksWithScriptUrl);
+
+const blocklistMetadataSchema = compile("schemas/blocklist-metadata.schema.json");
+const blocklistMetadata = readJson("tests/fixtures/remote-config/blocklist-metadata.json");
+expectValid("blocklist provenance metadata", blocklistMetadataSchema, blocklistMetadata);
+
+const blocklistMetadataWithCredentialUrl = clone(blocklistMetadata);
+blocklistMetadataWithCredentialUrl.sources[0].url = "https://user@lists.example/blocklist.txt";
+expectInvalid("blocklist credential URL", blocklistMetadataSchema, blocklistMetadataWithCredentialUrl);
+
 const burnAuditSchema = compile("schemas/burn-audit.schema.json");
 const burnAudit = readJson("tests/fixtures/burn-audit-pass.json");
 expectValid("passing burn audit", burnAuditSchema, burnAudit);

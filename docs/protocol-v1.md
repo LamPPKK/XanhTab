@@ -9,6 +9,8 @@
 - `xanhtab-netd` is the only privileged component. It accepts the versioned `EgressCommand` enum over a Unix socket and invokes allowlisted executables without a shell.
 - Sensitive browsing state belongs under `/run/xanhtab-session`. Non-secret configuration and compiled blocklists may remain on disk.
 
+Git-backed public configuration is a separate untrusted-input boundary even when fetched from an immutable ref. The installer reads only `config.json`, `custom_hosts.txt`, `bookmarks.json`, and `blocklist-metadata.json`; each must be a regular non-symlink file covered by the repository checksum list and the one-mebibyte limit. The signed staged daemon validates the versioned JSON contracts and strict ASCII hostnames before package or product-file mutation. On a fresh install, `config.json` may alter only the initial URL, stream profile, and auto-burn interval; it cannot alter TLS, service paths, UIDs, egress, or secret references. Bookmarks and provenance metadata remain non-secret disk state and are not browsing history.
+
 ## Authentication
 
 At boot and after every burn, the daemon creates 256 bits with the OS CSPRNG. The QR URL carries the URL-safe representation in its fragment, so it is not sent in an HTTP request or proxy log. The grouped Base32 manual code represents the same bytes and is accepted as an alternative.

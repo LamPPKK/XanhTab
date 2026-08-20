@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{fs::OpenOptions, io::Write, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
@@ -15,6 +15,7 @@ use xanhtab::{
     events::EventBus,
     metrics::MetricsCollector,
     netd::{EgressBackend, MockEgress, SocketEgress},
+    remote_config::{apply_public_config_file, validate_public_config_dir},
     session::SessionManager,
 };
 
@@ -26,6 +27,20 @@ struct Args {
     /// Validate configuration and exit without starting any service.
     #[arg(long)]
     check_config: bool,
+    /// Validate a Git-backed non-secret configuration directory and exit.
+    #[arg(long, value_name = "DIR", conflicts_with = "check_config")]
+    check_public_config_dir: Option<PathBuf>,
+    /// Merge reviewed non-secret session defaults and write a new TOML file.
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "write_config",
+        conflicts_with_all = ["check_config", "check_public_config_dir"]
+    )]
+    apply_public_config: Option<PathBuf>,
+    /// New output path used only with --apply-public-config; it must not exist.
+    #[arg(long, value_name = "FILE", requires = "apply_public_config")]
+    write_config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -39,7 +54,28 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    if let Some(directory) = &args.check_public_config_dir {
+        validate_public_config_dir(directory)?;
+        info!(directory = %directory.display(), "public configuration is valid");
+        return Ok(());
+    }
     let mut config = Config::load(&args.config)?;
+    if let Some(public_config) = &args.apply_public_config {
+        apply_public_config_file(&mut config, public_config)?;
+        let output = args
+            .write_config
+            .as_ref()
+            .context("--write-config is required with --apply-public-config")?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .with_context(|| format!("failed to create merged config {}", output.display()))?;
+        file.write_all(toml::to_string_pretty(&config)?.as_bytes())?;
+        file.sync_all()?;
+        info!(output = %output.display(), "merged public configuration is valid");
+        return Ok(());
+    }
     if args.check_config {
         info!(config = %args.config.display(), "configuration is valid");
         return Ok(());

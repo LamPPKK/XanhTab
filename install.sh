@@ -163,6 +163,9 @@ preflight() {
   for tool in curl jq minisign sha256sum tar zstd file find; do
     command -v "$tool" >/dev/null || die "$tool is required before any system mutation"
   done
+  if [[ -n "$CONFIG_REPO" ]]; then
+    command -v git >/dev/null || die "git is required before any system mutation when --config-repo is used"
+  fi
 }
 
 install_system_dependencies() {
@@ -296,6 +299,9 @@ download_and_verify_release() {
     schemas/config.schema.json \
     schemas/release-manifest.schema.json \
     schemas/burn-audit.schema.json \
+    schemas/remote-config.schema.json \
+    schemas/bookmarks.schema.json \
+    schemas/blocklist-metadata.schema.json \
     plugins/gstreamer-1.0/libgstrswebrtc.so \
     checksums.sha256; do
     [[ -f "$WORK_DIR/release/$relative" ]] || die "release is missing $relative"
@@ -319,11 +325,13 @@ sync_public_config() {
   git -C "$checkout" remote add origin "$CONFIG_REPO"
   git -C "$checkout" fetch -q --depth 1 origin "$CONFIG_REF"
   git -C "$checkout" checkout -q --detach FETCH_HEAD
-  [[ -f "$checkout/checksums.sha256" ]] || die "config repository must provide checksums.sha256"
+  [[ -f "$checkout/checksums.sha256" && ! -L "$checkout/checksums.sha256" ]] || die "config repository must provide a regular checksums.sha256 file"
+  (( $(wc -c < "$checkout/checksums.sha256") <= 1048576 )) || die "checksums.sha256 exceeds the 1 MiB limit"
   local allowed=(config.json custom_hosts.txt bookmarks.json blocklist-metadata.json)
   local name size expected actual
   install -d -m 0750 "$WORK_DIR/public-config"
   for name in "${allowed[@]}"; do
+    [[ ! -L "$checkout/$name" ]] || die "$name must not be a symbolic link"
     [[ -f "$checkout/$name" ]] || continue
     size="$(wc -c < "$checkout/$name")"
     (( size <= 1048576 )) || die "$name exceeds the 1 MiB limit"
@@ -333,7 +341,13 @@ sync_public_config() {
     [[ "${actual,,}" == "${expected,,}" ]] || die "checksum mismatch for $name"
     install -m 0640 "$checkout/$name" "$WORK_DIR/public-config/$name"
   done
-  [[ ! -f "$WORK_DIR/public-config/config.json" ]] || jq -e '.schema_version == 1' "$WORK_DIR/public-config/config.json" >/dev/null || die "config.json schema_version must be 1"
+  "$WORK_DIR/release/bin/xanhtabd" --check-public-config-dir "$WORK_DIR/public-config"
+  if [[ -f "$WORK_DIR/public-config/config.json" ]]; then
+    "$WORK_DIR/release/bin/xanhtabd" \
+      --config "$WORK_DIR/release/config/xanhtab.production.toml" \
+      --apply-public-config "$WORK_DIR/public-config/config.json" \
+      --write-config "$WORK_DIR/effective-config.toml"
+  fi
 }
 
 install_secrets() {
@@ -374,6 +388,8 @@ install_secrets() {
 
 install_release() {
   local release="$WORK_DIR/release"
+  local config_source="$release/config/xanhtab.production.toml"
+  [[ ! -f "$WORK_DIR/effective-config.toml" ]] || config_source="$WORK_DIR/effective-config.toml"
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -414,7 +430,7 @@ install_release() {
   run install -m 0644 "$release/systemd/xanhtab.sysusers" /usr/lib/sysusers.d/xanhtab.conf
   run systemd-sysusers /usr/lib/sysusers.d/xanhtab.conf
   if [[ "$REPAIR" == 0 || ! -f /etc/xanhtab/xanhtab.toml ]]; then
-    run install -m 0640 "$release/config/xanhtab.production.toml" /etc/xanhtab/xanhtab.toml
+    run install -m 0640 "$config_source" /etc/xanhtab/xanhtab.toml
   fi
   if [[ "$DRY_RUN" == 0 ]]; then
     local control_uid browser_uid
@@ -583,9 +599,9 @@ main() {
   preflight
   WORK_DIR="$(mktemp -d -t xanhtab-install.XXXXXXXX)"
   download_and_verify_release
+  [[ "$DRY_RUN" == 1 ]] || sync_public_config
   install_system_dependencies
   validate_runtime_abi
-  [[ "$DRY_RUN" == 1 ]] || sync_public_config
   install_release
   activate_and_healthcheck
   INSTALL_COMMITTED=1
