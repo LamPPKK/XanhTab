@@ -63,6 +63,7 @@ pub enum TicketPurpose {
 #[derive(Debug, Clone)]
 pub struct AuthContext {
     pub client_id: Uuid,
+    generation: u64,
 }
 
 #[derive(Debug)]
@@ -217,10 +218,7 @@ impl AuthManager {
         let session_hash = hash(token.as_bytes());
         let now = Instant::now();
         let mut state = self.inner.write().expect("auth state lock poisoned");
-        let generation = state.generation;
-        state
-            .sessions
-            .retain(|_, session| session.expires_at > now && session.generation == generation);
+        prune_expired(&mut state, now);
         let session = state
             .sessions
             .get(&session_hash)
@@ -235,7 +233,25 @@ impl AuthManager {
 
         Ok(AuthContext {
             client_id: session.client_id,
+            generation: session.generation,
         })
+    }
+
+    pub fn validate_context(&self, context: &AuthContext) -> Result<(), AppError> {
+        let now = Instant::now();
+        let mut state = self.inner.write().expect("auth state lock poisoned");
+        prune_expired(&mut state, now);
+        if context.generation == state.generation
+            && state.sessions.values().any(|session| {
+                session.client_id == context.client_id
+                    && session.generation == context.generation
+                    && session.expires_at > now
+            })
+        {
+            Ok(())
+        } else {
+            Err(AppError::Unauthorized)
+        }
     }
 
     pub fn issue_ticket(
@@ -245,12 +261,23 @@ impl AuthManager {
     ) -> Result<Zeroizing<String>, AppError> {
         let token = Zeroizing::new(random_token().map_err(|_| AppError::Internal)?);
         let mut state = self.inner.write().expect("auth state lock poisoned");
+        let now = Instant::now();
+        prune_expired(&mut state, now);
         let generation = state.generation;
+        if context.generation != generation
+            || !state.sessions.values().any(|session| {
+                session.client_id == context.client_id
+                    && session.generation == generation
+                    && session.expires_at > now
+            })
+        {
+            return Err(AppError::Unauthorized);
+        }
         state.tickets.insert(
             hash(token.as_bytes()),
             Ticket {
                 client_id: context.client_id,
-                expires_at: Instant::now() + self.ticket_ttl,
+                expires_at: now + self.ticket_ttl,
                 generation,
                 purpose,
             },
@@ -276,6 +303,7 @@ impl AuthManager {
         }
         Ok(AuthContext {
             client_id: ticket.client_id,
+            generation: ticket.generation,
         })
     }
 
@@ -285,10 +313,46 @@ impl AuthManager {
         state.tickets.clear();
     }
 
+    /// Marks a newly generated pairing as unavailable when its root-only
+    /// handoff file could not be published. The watchdog can then retry with
+    /// an entirely new generation instead of leaving an unreachable secret.
+    pub(crate) fn invalidate_unpublished_pairing(&self) {
+        let mut state = self.inner.write().expect("auth state lock poisoned");
+        state.pairing_hash = None;
+        state.manual_pairing_hash = None;
+        state.sessions.clear();
+        state.tickets.clear();
+    }
+
+    /// Returns true when one-time pairing has been consumed and every
+    /// controller session has expired. The lifecycle watchdog uses this to
+    /// burn any abandoned browser state and publish fresh pairing material.
+    pub fn pairing_recovery_required(&self) -> bool {
+        let now = Instant::now();
+        let mut state = self.inner.write().expect("auth state lock poisoned");
+        prune_expired(&mut state, now);
+        let generation = state.generation;
+
+        generation > 0
+            && state.pairing_hash.is_none()
+            && state.manual_pairing_hash.is_none()
+            && state.sessions.is_empty()
+    }
+
     pub fn pairing_available(&self) -> bool {
         let state = self.inner.read().expect("auth state lock poisoned");
         state.pairing_hash.is_some() || state.manual_pairing_hash.is_some()
     }
+}
+
+fn prune_expired(state: &mut AuthState, now: Instant) {
+    let generation = state.generation;
+    state
+        .sessions
+        .retain(|_, session| session.expires_at > now && session.generation == generation);
+    state
+        .tickets
+        .retain(|_, ticket| ticket.expires_at > now && ticket.generation == generation);
 }
 
 fn random_bytes<const N: usize>() -> Result<[u8; N]> {
@@ -357,6 +421,10 @@ mod tests {
             .unwrap();
         auth.rotate_pairing().unwrap();
         assert!(
+            auth.issue_ticket(&context, TicketPurpose::Signaling)
+                .is_err()
+        );
+        assert!(
             auth.consume_ticket(ticket.as_str(), TicketPurpose::Signaling)
                 .is_err()
         );
@@ -398,5 +466,28 @@ mod tests {
         let pairing = auth.rotate_pairing().unwrap();
         assert!(auth.exchange_pairing(pairing.manual_code.as_str()).is_ok());
         assert!(auth.exchange_pairing(pairing.manual_code.as_str()).is_err());
+    }
+
+    #[test]
+    fn consumed_pairing_requires_recovery_after_auth_expiry() {
+        let auth = AuthManager::new(Duration::from_secs(1), Duration::from_secs(1));
+        let pairing = auth.rotate_pairing().unwrap();
+        auth.exchange_pairing(pairing.secret.as_str()).unwrap();
+        assert!(!auth.pairing_recovery_required());
+
+        std::thread::sleep(Duration::from_millis(1_100));
+        assert!(auth.pairing_recovery_required());
+
+        auth.rotate_pairing().unwrap();
+        assert!(!auth.pairing_recovery_required());
+    }
+
+    #[test]
+    fn unpublished_pairing_is_recoverable() {
+        let auth = manager();
+        auth.rotate_pairing().unwrap();
+        auth.invalidate_unpublished_pairing();
+        assert!(!auth.pairing_available());
+        assert!(auth.pairing_recovery_required());
     }
 }

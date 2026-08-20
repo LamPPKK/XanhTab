@@ -162,7 +162,7 @@ async fn start_session(
         Url::parse(&state.config.session.initial_url).expect("validated initial URL")
     });
     validate_navigation_url(&url)?;
-    Ok(Json(state.sessions.start(context.client_id, url).await?))
+    Ok(Json(state.start_session(&context, url).await?))
 }
 
 async fn burn_session(
@@ -172,22 +172,7 @@ async fn burn_session(
     headers: HeaderMap,
 ) -> Result<(CookieJar, Json<SessionSnapshot>), AppError> {
     let context = authenticate(&state, &jar, &headers, true)?;
-    require_session_id(&state, id).await?;
-    let burn_result = state.sessions.burn(context.client_id).await;
-    state.auth.revoke_all();
-    let pairing = state
-        .auth
-        .rotate_pairing()
-        .map_err(|_| AppError::Internal)?;
-    state
-        .auth
-        .write_pairing_file(
-            &pairing,
-            &state.config.session.pairing_file,
-            &state.config.server.public_base_url,
-        )
-        .map_err(|_| AppError::Internal)?;
-    let snapshot = burn_result?;
+    let snapshot = state.burn_controller_session(&context, id).await?;
     let removal = Cookie::build((SESSION_COOKIE, ""))
         .path("/")
         .http_only(true)
@@ -206,13 +191,10 @@ async fn navigate(
 ) -> Result<Json<SessionSnapshot>, AppError> {
     let command = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
-    require_session_id(&state, id).await?;
     if let NavigationCommand::Navigate { url } = &command {
         validate_navigation_url(url)?;
     }
-    Ok(Json(
-        state.sessions.navigate(context.client_id, command).await?,
-    ))
+    Ok(Json(state.navigate(&context, id, command).await?))
 }
 
 #[derive(Deserialize)]
@@ -230,13 +212,7 @@ async fn set_egress(
 ) -> Result<Json<SessionSnapshot>, AppError> {
     let request = parse_json(payload)?;
     let context = authenticate(&state, &jar, &headers, true)?;
-    require_session_id(&state, id).await?;
-    Ok(Json(
-        state
-            .sessions
-            .switch_egress(context.client_id, request.mode)
-            .await?,
-    ))
+    Ok(Json(state.switch_egress(&context, id, request.mode).await?))
 }
 
 #[derive(Deserialize)]
@@ -664,6 +640,7 @@ mod tests {
             events,
             browser,
             egress,
+            lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         };
         let mut headers = HeaderMap::new();
         headers.insert(header::ORIGIN, "https://attacker.example".parse().unwrap());

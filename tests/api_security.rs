@@ -28,6 +28,10 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with_auth_ttl(Duration::from_secs(600))
+}
+
+fn harness_with_auth_ttl(auth_ttl: Duration) -> Harness {
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.server.static_dir = temp.path().join("web");
@@ -46,7 +50,7 @@ fn harness() -> Harness {
         config.session.initial_profile,
         config.session.auto_burn_seconds,
     );
-    let auth = AuthManager::new(Duration::from_secs(600), Duration::from_secs(30));
+    let auth = AuthManager::new(auth_ttl, Duration::from_secs(30));
     let pairing = auth.rotate_pairing().unwrap();
     let secret = pairing.secret.to_string();
     auth.write_pairing_file(
@@ -63,6 +67,7 @@ fn harness() -> Harness {
         events,
         browser,
         egress,
+        lifecycle: Arc::new(tokio::sync::Mutex::new(())),
     };
     Harness {
         app: api::router(state.clone()),
@@ -77,13 +82,17 @@ async fn body_json(response: axum::response::Response) -> Value {
 }
 
 async fn pair(harness: &Harness) -> (String, String) {
+    pair_with_secret(harness, &harness.secret).await
+}
+
+async fn pair_with_secret(harness: &Harness, secret: &str) -> (String, String) {
     let response = harness
         .app
         .clone()
         .oneshot(
             Request::post("/api/v1/pair/exchange")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "secret": harness.secret }).to_string()))
+                .body(Body::from(json!({ "secret": secret }).to_string()))
                 .unwrap(),
         )
         .await
@@ -98,6 +107,18 @@ async fn pair(harness: &Harness) -> (String, String) {
         .to_string();
     let payload = body_json(response).await;
     (cookie, payload["csrf_token"].as_str().unwrap().to_string())
+}
+
+fn pairing_secret(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("PAIRING_URL=")
+                .and_then(|url| url.split_once("#pair="))
+                .map(|(_, secret)| secret.to_string())
+        })
+        .expect("pairing file contains a fragment secret")
 }
 
 #[tokio::test]
@@ -169,6 +190,92 @@ async fn malformed_json_uses_a_stable_redacted_error() {
         payload["error"]["message"],
         "invalid request: malformed JSON body"
     );
+}
+
+#[tokio::test]
+async fn expired_auth_burns_session_and_publishes_fresh_pairing() {
+    let harness = harness_with_auth_ttl(Duration::from_secs(1));
+    let original_secret = harness.secret.clone();
+    let (cookie, csrf) = pair(&harness).await;
+    let session_token = cookie
+        .split_once('=')
+        .map(|(_, value)| value)
+        .expect("session cookie has a value");
+    let stale_context = harness
+        .state
+        .auth
+        .authenticate(Some(session_token), None, false)
+        .unwrap();
+    let started = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/session")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-xanhtab-csrf", &csrf)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    std::fs::create_dir_all(&harness.state.config.session.runtime_dir).unwrap();
+    std::fs::write(
+        harness.state.config.session.runtime_dir.join("cookie.db"),
+        "secret",
+    )
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(harness.state.recover_expired_auth().await.unwrap());
+    assert_eq!(
+        harness.state.sessions.snapshot().await.phase,
+        xanhtab::model::SessionPhase::Idle
+    );
+    assert_eq!(
+        std::fs::read_dir(&harness.state.config.session.runtime_dir)
+            .unwrap()
+            .count(),
+        0
+    );
+
+    let stale = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/session")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+    assert!(matches!(
+        harness
+            .state
+            .start_session(
+                &stale_context,
+                url::Url::parse("https://example.com/stale").unwrap(),
+            )
+            .await,
+        Err(xanhtab::error::AppError::Unauthorized)
+    ));
+    assert!(!harness.state.recover_expired_auth().await.unwrap());
+
+    let status = harness
+        .app
+        .clone()
+        .oneshot(Request::get("/api/v1/status").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    assert_eq!(body_json(status).await["pairing_available"], true);
+
+    let fresh_secret = pairing_secret(&harness.state.config.session.pairing_file);
+    assert_ne!(fresh_secret, original_secret);
+    let _ = pair_with_secret(&harness, &fresh_secret).await;
 }
 
 #[tokio::test]

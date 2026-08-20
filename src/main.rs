@@ -88,8 +88,9 @@ async fn main() -> Result<()> {
         events,
         browser,
         egress,
+        lifecycle: Arc::new(tokio::sync::Mutex::new(())),
     };
-    spawn_auto_burn(state.clone());
+    spawn_lifecycle_watchdog(state.clone());
     let app = api::router(state);
     let listen = config.server.listen;
     info!(%listen, "xanhtabd listening");
@@ -113,35 +114,24 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn spawn_auto_burn(state: AppState) {
+fn spawn_lifecycle_watchdog(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let snapshot = state.sessions.snapshot().await;
-            let threshold = Duration::from_secs(snapshot.auto_burn_seconds);
-            if snapshot.phase != xanhtab::model::SessionPhase::Active
-                || threshold.is_zero()
-                || state.sessions.idle_for().await < threshold
-            {
-                continue;
+            match state.recover_expired_auth().await {
+                Ok(true) => warn!("expired controller auth recovered with Burn and fresh pairing"),
+                Ok(false) => {}
+                Err(error) => {
+                    warn!(%error, "expired controller auth recovery did not complete cleanly")
+                }
             }
-            warn!(session_id = ?snapshot.id, "auto-burn inactivity threshold reached");
-            let burn_result = state.sessions.force_burn().await;
-            state.auth.revoke_all();
-            match state.auth.rotate_pairing().and_then(|pairing| {
-                state.auth.write_pairing_file(
-                    &pairing,
-                    &state.config.session.pairing_file,
-                    &state.config.server.public_base_url,
-                )
-            }) {
-                Ok(()) => {}
-                Err(error) => warn!(%error, "failed to rotate pairing material after auto-burn"),
-            }
-            if let Err(error) = burn_result {
-                warn!(%error, "auto-burn cleanup did not complete cleanly");
+
+            match state.auto_burn_if_due().await {
+                Ok(true) => warn!("auto-burn inactivity threshold reached; session destroyed"),
+                Ok(false) => {}
+                Err(error) => warn!(%error, "auto-burn lifecycle did not complete cleanly"),
             }
         }
     });

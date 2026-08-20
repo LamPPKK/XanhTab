@@ -1,6 +1,6 @@
 # XanhTab
 
-XanhTab is the Raspberry Pi Zero 2 W remote-browser appliance in the Fireball Browser ecosystem. It exposes one WPE WebKit view to one paired controller over the local network or a private VPN. It has no account system, keeps sensitive session data in tmpfs, and treats Burn Session as a measured security lifecycle rather than a visual reset.
+XanhTab is the Raspberry Pi Zero 2 W remote-browser appliance in the Fireball Browser ecosystem. It exposes one WPE WebKit view to one paired controller over the local network or a private VPN. It has no account system, keeps sensitive session data in tmpfs, and treats Burn Session as a measured security lifecycle rather than a visual reset. If the controller authorization expires, the daemon burns any abandoned browser session and publishes new one-time pairing material even when inactivity auto-burn is disabled.
 
 ## Current implementation status
 

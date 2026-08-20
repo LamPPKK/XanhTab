@@ -15,6 +15,8 @@ At boot and after every burn, the daemon creates 256 bits with the OS CSPRNG. Th
 
 `POST /api/v1/pair/exchange` consumes either representation exactly once. It returns a CSRF token in the response body and sets `xanhtab_session` as `HttpOnly`, `SameSite=Strict`, and `Secure` in production. Mutations require both the cookie and `X-XanhTab-CSRF`. Five failed pairing attempts cause a global 30-second delay.
 
+Controller authorization has a bounded TTL. A five-second lifecycle watchdog detects when the consumed pairing no longer has a live controller session, serializes against start, egress switch, manual Burn, and inactivity Burn, destroys any abandoned browser state, and publishes a fresh one-time pairing generation. Disabling inactivity auto-burn never makes an expired controller session reusable.
+
 Event and WebRTC signaling connections use purpose-bound, one-time, short-lived tickets from `POST /api/v1/webrtc/ticket`. Tickets never appear in the WebSocket URL: the client must send `{"type":"authenticate","ticket":"…"}` as its first text frame within five seconds. A ticket issued for `events` cannot open `signaling`, and either use consumes it. Burn increments the auth generation and invalidates every cookie and outstanding ticket.
 
 ## Session state
