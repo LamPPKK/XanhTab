@@ -71,7 +71,9 @@ Before changing packages or boot configuration, capture the bounded hardware-enc
 scripts/x0-encoder-probe.sh
 ```
 
-The probe runs `videotestsrc` through `v4l2h264enc` in the diagnostic order 480p10, 720p15, 720p30, and 1080p30. Every profile has a deadline and its own log. It creates a new, non-overwriting evidence directory containing `preflight.json`, redacted pre/post dmesg captures, a `summary.json` following [`schemas/encoder-probe.schema.json`](schemas/encoder-probe.schema.json), and `SHA256SUMS` for the complete bundle. MAC addresses, UUID/PARTUUID values, cloud-init instance IDs, USB serial values, and IPv4 addresses are removed during capture rather than after publication. A zero exit means the 720p15 release floor encoded successfully; it does not mean Gate X0 passed.
+The probe runs `videotestsrc` through `v4l2h264enc` in the diagnostic order 480p10, 720p15, 720p30, and 1080p30. Every attempted profile has a deadline, its own log, and before/after `CmaFree` evidence. It refuses to touch the encoder below a 32 MiB CMA safety floor and stops after the first failed profile by default; `--continue-after-failure` is reserved for a controlled diagnostic run and still rechecks the CMA floor before every profile. The probe creates a new, non-overwriting evidence directory containing `preflight.json`, redacted pre/post dmesg captures, a `summary.json` following [`schemas/encoder-probe.schema.json`](schemas/encoder-probe.schema.json), and `SHA256SUMS` for the complete bundle. MAC addresses, UUID/PARTUUID values, cloud-init instance IDs, USB serial values, and IPv4 addresses are removed during capture rather than after publication. A zero exit means the 720p15 release floor encoded successfully; it does not mean Gate X0 passed.
+
+The current device must not be probed again before CMA recovery. Follow the approval, verification, and rollback sequence in the [Gate X0 remediation runbook](docs/x0-remediation-runbook.md).
 
 On a supported Trixie Pi Zero 2 W, install the required WPE/GStreamer packages and build a release binary. Then run:
 
@@ -87,7 +89,7 @@ scripts/evaluate-x0.sh .x0-results/UTC_TIMESTAMP
 
 The evaluator only returns GO when 720p15 has less than 2% frame drop, input latency p95 below 250 ms, browser/stream below 400 MiB, at least 48 MiB available, no OOM, and no sustained throttle. If only 480p10 passes, development freezes as required.
 
-`scripts/x0-preflight-json.sh` performs read-only discovery of the Pi model, kernel, firmware, CMA, encoder/render devices, cgroup v2 memory-controller state, GStreamer ABI and required elements. It does not install packages or modify boot configuration.
+`scripts/x0-preflight-json.sh` performs read-only discovery of the Pi model, kernel, firmware, total/free CMA, encoder/render devices, active and boot-file cgroup intent, selected installed/candidate package versions, GStreamer ABI and required elements. It does not refresh APT metadata, install packages or modify boot configuration.
 
 ## Verified installation
 

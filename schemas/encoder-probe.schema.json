@@ -29,7 +29,7 @@
     },
     "profiles": {
       "type": "array",
-      "minItems": 4,
+      "minItems": 1,
       "maxItems": 4,
       "items": {
         "type": "object",
@@ -73,6 +73,14 @@
             "maximum": 255
           },
           "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cma_free_kib_before": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cma_free_kib_after": {
             "type": "integer",
             "minimum": 0
           },

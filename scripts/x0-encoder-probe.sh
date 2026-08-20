@@ -11,7 +11,9 @@ readonly GST_INSPECT_BIN="${XANHTAB_GST_INSPECT_BIN:-gst-inspect-1.0}"
 readonly TIMEOUT_BIN="${XANHTAB_TIMEOUT_BIN:-timeout}"
 readonly PREFLIGHT_BIN="${XANHTAB_PREFLIGHT_BIN:-$ROOT/scripts/x0-preflight-json.sh}"
 readonly DMESG_BIN="${XANHTAB_DMESG_BIN:-dmesg}"
+readonly MEMINFO_PATH="${XANHTAB_MEMINFO_PATH:-/proc/meminfo}"
 readonly ARCHITECTURE="${XANHTAB_ARCHITECTURE:-$(uname -m)}"
+readonly MIN_CMA_FREE_KIB=32768
 readonly PROFILES=(
   "480p10:854:480:10"
   "720p15:1280:720:15"
@@ -23,6 +25,7 @@ OUTPUT=""
 FRAMES=300
 TIMEOUT_SECONDS=30
 DRY_RUN=0
+CONTINUE_AFTER_FAILURE=0
 
 usage() {
   printf '%s\n' \
@@ -30,6 +33,7 @@ usage() {
     '  --output DIR          New evidence directory (default .x0-results/encoder-<UTC>).' \
     '  --frames N            Frames per profile (default 300).' \
     '  --timeout-seconds N   Per-profile deadline (default 30).' \
+    '  --continue-after-failure  Attempt later profiles while the CMA safety floor holds.' \
     '  --dry-run             Validate hardware and print the planned matrix.'
 }
 
@@ -98,11 +102,17 @@ require_optional_command() {
   fi
 }
 
+cma_free_kib() {
+  [[ -r "$MEMINFO_PATH" ]] || return 1
+  awk '/^CmaFree:/ {print $2; found=1; exit} END {if (!found) exit 1}' "$MEMINFO_PATH"
+}
+
 while (($#)); do
   case "$1" in
     --output) [[ $# -ge 2 ]] || die "--output requires a value"; OUTPUT="$2"; shift 2 ;;
     --frames) [[ $# -ge 2 ]] || die "--frames requires a value"; FRAMES="$2"; shift 2 ;;
     --timeout-seconds) [[ $# -ge 2 ]] || die "--timeout-seconds requires a value"; TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --continue-after-failure) CONTINUE_AFTER_FAILURE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -117,6 +127,10 @@ done
 [[ -r "$MODEL_PATH" ]] || die "Raspberry Pi model information is unavailable"
 grep -aq 'Raspberry Pi Zero 2 W' "$MODEL_PATH" || die "encoder probe must run on a Raspberry Pi Zero 2 W"
 [[ -e "$VIDEO_DEVICE" ]] || die "encoder device is unavailable: $VIDEO_DEVICE"
+initial_cma_free_kib="$(cma_free_kib)" || die "CmaFree is unavailable from $MEMINFO_PATH"
+[[ "$initial_cma_free_kib" =~ ^[0-9]+$ ]] || die "CmaFree is not an integer"
+((initial_cma_free_kib >= MIN_CMA_FREE_KIB)) \
+  || die "CmaFree=${initial_cma_free_kib} KiB is below the ${MIN_CMA_FREE_KIB} KiB safety floor; reboot and investigate before probing again"
 
 for executable in "$GST_LAUNCH_BIN" "$GST_INSPECT_BIN" "$TIMEOUT_BIN" "$PREFLIGHT_BIN" jq sha256sum; do
   require_command "$executable"
@@ -130,7 +144,7 @@ if [[ "$DRY_RUN" == 1 ]]; then
   for profile_row in "${PROFILES[@]}"; do
     profile_names+=("${profile_row%%:*}")
   done
-  printf 'device=%s frames=%s timeout_seconds=%s profiles=' "$VIDEO_DEVICE" "$FRAMES" "$TIMEOUT_SECONDS"
+  printf 'device=%s frames=%s timeout_seconds=%s cma_free_kib=%s profiles=' "$VIDEO_DEVICE" "$FRAMES" "$TIMEOUT_SECONDS" "$initial_cma_free_kib"
   (IFS=,; printf '%s\n' "${profile_names[*]}")
   exit 0
 fi
@@ -151,6 +165,11 @@ profile_results="$OUTPUT/.profile-results.jsonl"
 
 for profile_row in "${PROFILES[@]}"; do
   IFS=: read -r profile width height fps <<< "$profile_row"
+  before_cma_free_kib="$(cma_free_kib)" || die "CmaFree became unavailable before $profile"
+  if ((before_cma_free_kib < MIN_CMA_FREE_KIB)); then
+    log "stopping before $profile: CmaFree=${before_cma_free_kib} KiB is below the ${MIN_CMA_FREE_KIB} KiB safety floor"
+    break
+  fi
   log_file="$OUTPUT/logs/$profile.log"
   start_ms="$(now_ms)"
   log "profile=$profile width=$width height=$height fps=$fps frames=$FRAMES"
@@ -171,6 +190,7 @@ for profile_row in "${PROFILES[@]}"; do
   classification="$(classification_for "$exit_code" "$log_file")"
   passed=false
   [[ "$exit_code" == 0 ]] && passed=true
+  after_cma_free_kib="$(cma_free_kib)" || die "CmaFree became unavailable after $profile"
 
   jq -cn \
     --arg profile "$profile" \
@@ -183,6 +203,8 @@ for profile_row in "${PROFILES[@]}"; do
     --argjson exit_code "$exit_code" \
     --argjson duration_ms "$duration_ms" \
     --argjson passed "$passed" \
+    --argjson cma_free_kib_before "$before_cma_free_kib" \
+    --argjson cma_free_kib_after "$after_cma_free_kib" \
     '{
       profile: $profile,
       width: $width,
@@ -192,9 +214,16 @@ for profile_row in "${PROFILES[@]}"; do
       exit_code: $exit_code,
       duration_ms: $duration_ms,
       passed: $passed,
+      cma_free_kib_before: $cma_free_kib_before,
+      cma_free_kib_after: $cma_free_kib_after,
       classification: $classification,
       log_file: $log_file
     }' >> "$profile_results"
+
+  if [[ "$passed" != true && "$CONTINUE_AFTER_FAILURE" != 1 ]]; then
+    log "stopping after $profile failure; use --continue-after-failure only for a controlled diagnostic run"
+    break
+  fi
 done
 
 capture_dmesg "$OUTPUT/dmesg-after.log"
@@ -213,7 +242,7 @@ jq -s \
       verdict: {
         emergency_480p10: passed("480p10"),
         release_floor_720p15: passed("720p15"),
-        all_profiles: all(.[]; .passed),
+        all_profiles: (length == 4 and all(.[]; .passed)),
         status: (if passed("720p15") then "release-floor-pass" else "no-go" end)
       }
     }
